@@ -18,11 +18,12 @@ import (
 	"fmt"
 	rand "math/rand/v2"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/multigres/multigres/go/tools/capture"
 
 	"github.com/multigres/multigres/go/pgctld"
 )
@@ -97,7 +98,7 @@ func CreatePIDFile(t *testing.T, dataDir string, pid int) {
 	t.Helper()
 
 	// Start a background sleep process to get a real PID that will pass the isProcessRunning check
-	cmd := exec.Command("sleep", "3600")
+	cmd := capture.Command("sleep", "3600")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("Failed to start background sleep process: %v", err)
 	}

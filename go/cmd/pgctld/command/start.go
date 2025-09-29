@@ -25,6 +25,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/capture"
+
 	"github.com/spf13/cobra"
 
 	"github.com/multigres/multigres/go/pgctld"
@@ -235,7 +237,7 @@ func waitForPostgreSQLWithConfig(config *pgctld.PostgresCtlConfig) error {
 	// Try to connect using pg_isready
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
 	for i := 0; i < config.Timeout; i++ {
-		cmd := exec.Command("pg_isready",
+		cmd := capture.Command("pg_isready",
 			"-h", socketDir,
 			"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 			"-U", config.User,

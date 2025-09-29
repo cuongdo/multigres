@@ -20,9 +20,11 @@ import (
 	"os/exec"
 	"strings"
 	"testing"
+
+	"github.com/multigres/multigres/go/tools/capture"
 )
 
-// MockExecCommand mocks exec.Command for testing
+// MockExecCommand mocks capture.Command for testing
 type MockExecCommand struct {
 	commands map[string]MockCommandResult
 }
@@ -52,7 +54,7 @@ func (m *MockExecCommand) MockCommand(name string, args ...string) *exec.Cmd {
 	cmdLine := fmt.Sprintf("%s %s", name, strings.Join(args, " "))
 
 	// Create a fake command that will be handled by the test helper
-	cmd := exec.Command("echo", "mock")
+	cmd := capture.Command("echo", "mock")
 
 	// Store the command line for verification
 	if cmd.Env == nil {

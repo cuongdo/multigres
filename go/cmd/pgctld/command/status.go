@@ -22,6 +22,8 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/capture"
+
 	"github.com/multigres/multigres/go/pgctld"
 
 	"github.com/spf13/cobra"
@@ -185,7 +187,7 @@ func formatUptime(seconds int64) string {
 func isServerReadyWithConfig(config *pgctld.PostgresCtlConfig) bool {
 	// Use Unix socket connection for pg_isready
 	socketDir := pgctld.PostgresSocketDir(config.PoolerDir)
-	cmd := exec.Command("pg_isready",
+	cmd := capture.Command("pg_isready",
 		"-h", socketDir,
 		"-p", fmt.Sprintf("%d", config.Port), // Need port even for socket connections
 		"-U", config.User,

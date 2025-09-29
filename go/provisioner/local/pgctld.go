@@ -18,8 +18,9 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"time"
+
+	"github.com/multigres/multigres/go/tools/capture"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -244,7 +245,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		initArgs = append(initArgs, "--pg-pwfile", pgPwfile)
 	}
 
-	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
+	initCmd := capture.CommandContext(ctx, pgctldBinary, initArgs...)
 	if err := initCmd.Run(); err != nil {
 		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
@@ -265,7 +266,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		"--log-output", pgctldLogFile,
 	}
 
-	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
+	pgctldCmd := capture.CommandContext(ctx, pgctldBinary, serverArgs...)
 	if err := pgctldCmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}

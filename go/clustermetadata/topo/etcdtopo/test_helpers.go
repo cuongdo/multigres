@@ -25,6 +25,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/multigres/multigres/go/tools/capture"
+
 	"github.com/stretchr/testify/require"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
@@ -66,7 +68,7 @@ func StartEtcd(t *testing.T, port int) (string, *exec.Cmd) {
 	peerAddr := fmt.Sprintf("http://localhost:%v", port+1)
 	initialCluster := fmt.Sprintf("%v=%v", name, peerAddr)
 
-	cmd := exec.Command("etcd",
+	cmd := capture.Command("etcd",
 		"-name", name,
 		"-advertise-client-urls", clientAddr,
 		"-initial-advertise-peer-urls", peerAddr,
