@@ -44,7 +44,7 @@ func checkPortAvailable(port int) error {
 }
 
 // StartEtcd starts an etcd subprocess, and waits for it to be ready.
-func StartEtcd(t *testing.T, port int) (string, *exec.Cmd) {
+func StartEtcd(t *testing.T, port int) (string, *capture.Cmd) {
 	// Check if etcd is available in PATH
 	_, err := exec.LookPath("etcd")
 	require.NoError(t, err, "etcd not found in PATH")

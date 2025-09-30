@@ -18,9 +18,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"time"
-
-	"github.com/multigres/multigres/go/tools/capture"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -245,7 +244,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		initArgs = append(initArgs, "--pg-pwfile", pgPwfile)
 	}
 
-	initCmd := capture.CommandContext(ctx, pgctldBinary, initArgs...)
+	initCmd := exec.CommandContext(ctx, pgctldBinary, initArgs...)
 	if err := initCmd.Run(); err != nil {
 		return nil, fmt.Errorf("failed to initialize pgctld data directory: %w", err)
 	}
@@ -266,7 +265,7 @@ func (p *localProvisioner) provisionPgctld(ctx context.Context, dbName, tableGro
 		"--log-output", pgctldLogFile,
 	}
 
-	pgctldCmd := capture.CommandContext(ctx, pgctldBinary, serverArgs...)
+	pgctldCmd := exec.CommandContext(ctx, pgctldBinary, serverArgs...)
 	if err := pgctldCmd.Start(); err != nil {
 		return nil, fmt.Errorf("failed to start pgctld server: %w", err)
 	}
@@ -334,6 +333,9 @@ func (p *localProvisioner) deprovisionPgctld(ctx context.Context, service *Local
 	if err := p.stopProcessByPID(service.PID); err != nil {
 		return fmt.Errorf("failed to stop pgctld process: %w", err)
 	}
+
+	// Wait a moment for capture.Command goroutines to finish copying output
+	time.Sleep(100 * time.Millisecond)
 
 	// Clean up log file
 	if service.LogFile != "" {

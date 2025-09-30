@@ -31,8 +31,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/multigres/multigres/go/tools/capture"
-
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/provisioner"
 	"github.com/multigres/multigres/go/tools/appendpath"
@@ -195,7 +193,7 @@ func (p *localProvisioner) provisionEtcd(ctx context.Context, req *provisioner.P
 	}
 
 	// Start etcd process
-	etcdCmd := capture.CommandContext(ctx, etcdBinary, args...)
+	etcdCmd := exec.CommandContext(ctx, etcdBinary, args...)
 
 	fmt.Printf("▶️  - Launching etcd on port %d...", port)
 
@@ -451,7 +449,7 @@ func (p *localProvisioner) provisionMultigateway(ctx context.Context, req *provi
 	}
 
 	// Start multigateway process
-	multigatewayCmd := capture.CommandContext(ctx, multigatewayBinary, args...)
+	multigatewayCmd := exec.CommandContext(ctx, multigatewayBinary, args...)
 
 	fmt.Printf("▶️  - Launching multigateway (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
@@ -584,7 +582,7 @@ func (p *localProvisioner) provisionMultiadmin(ctx context.Context, req *provisi
 	}
 
 	// Start multiadmin process
-	multiadminCmd := capture.CommandContext(ctx, multiadminBinary, args...)
+	multiadminCmd := exec.CommandContext(ctx, multiadminBinary, args...)
 
 	fmt.Printf("▶️  - Launching multiadmin (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
@@ -767,7 +765,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	args = append(args, "--service-map", "grpc-pooler")
 
 	// Start multipooler process
-	multipoolerCmd := capture.CommandContext(ctx, multipoolerBinary, args...)
+	multipoolerCmd := exec.CommandContext(ctx, multipoolerBinary, args...)
 
 	fmt.Printf("▶️  - Launching multipooler (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 
@@ -913,7 +911,7 @@ func (p *localProvisioner) provisionMultiOrch(ctx context.Context, req *provisio
 	}
 
 	// Start multiorch process
-	multiorchCmd := capture.CommandContext(ctx, multiorchBinary, args...)
+	multiorchCmd := exec.CommandContext(ctx, multiorchBinary, args...)
 
 	fmt.Printf("▶️  - Launching multiorch (HTTP:%d, gRPC:%d)...", httpPort, grpcPort)
 

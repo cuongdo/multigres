@@ -17,7 +17,6 @@ package testutil
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -50,7 +49,7 @@ func (m *MockExecCommand) AddCommand(cmdLine string, result MockCommandResult) {
 }
 
 // MockCommand simulates command execution for testing
-func (m *MockExecCommand) MockCommand(name string, args ...string) *exec.Cmd {
+func (m *MockExecCommand) MockCommand(name string, args ...string) *capture.Cmd {
 	cmdLine := fmt.Sprintf("%s %s", name, strings.Join(args, " "))
 
 	// Create a fake command that will be handled by the test helper
