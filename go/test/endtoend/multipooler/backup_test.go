@@ -328,12 +328,6 @@ func TestBackup_FromStandby(t *testing.T) {
 		t.Skip("Skipping end-to-end tests in short mode")
 	}
 
-	t.Skip("Backups from standby require additional pgBackRest configuration. " +
-		"While the stanza name is now correctly shared between primary and standby, " +
-		"pgBackRest needs both pg1-* (standby) and pg2-* (primary) settings in the standby's " +
-		"config to perform backups from standby. This requires architectural changes to " +
-		"generate multi-host pgbackrest.conf files.")
-
 	setup := getSharedTestSetup(t)
 
 	// Wait for standby manager to be ready

@@ -599,17 +599,31 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 	// Note: Standby shares the same backup repository and stanza as primary
 	// since they're replicas. With the configurable stanza name, both primary
 	// and standby multipoolers will use the same stanza name.
+	//
+	// For standby backups, we need to configure both:
+	// - pg1: standby itself (for when running backups from standby)
+	// - pg2: primary (so pgBackRest knows where the primary is)
 	repoPath := filepath.Join(baseDir, "backup-repo")
 	logPath := filepath.Join(baseDir, "logs", "pgbackrest")
 
 	configPath := filepath.Join(standbyPgctld.DataDir, "pgbackrest.conf")
 	backupCfg := pgbackrest.Config{
-		StanzaName:    stanzaName, // Use same stanza as primary (they're replicas)
-		PgDataPath:    filepath.Join(standbyPgctld.DataDir, "pg_data"),
-		PgPort:        standbyPgctld.PgPort,
-		PgSocketDir:   filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
-		PgUser:        "postgres",
-		PgDatabase:    "postgres",
+		StanzaName:  stanzaName, // Use same stanza as primary (they're replicas)
+		PgDataPath:  filepath.Join(standbyPgctld.DataDir, "pg_data"),
+		PgPort:      standbyPgctld.PgPort,
+		PgSocketDir: filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
+		PgUser:      "postgres",
+		PgDatabase:  "postgres",
+		// Add primary as pg2 for standby backup support
+		AdditionalHosts: []pgbackrest.PgHost{
+			{
+				DataPath:  filepath.Join(primaryPgctld.DataDir, "pg_data"),
+				Port:      primaryPgctld.PgPort,
+				SocketDir: filepath.Join(primaryPgctld.DataDir, "pg_sockets"),
+				User:      "postgres",
+				Database:  "postgres",
+			},
+		},
 		RepoPath:      repoPath,
 		LogPath:       logPath,
 		RetentionFull: 2,
@@ -618,7 +632,7 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 	if err := pgbackrest.WriteConfigFile(configPath, backupCfg); err != nil {
 		return fmt.Errorf("failed to write standby pgbackrest config: %w", err)
 	}
-	t.Logf("Created standby pgbackrest config at %s (using primary's stanza: %s)", configPath, primaryPgctld.ServiceID)
+	t.Logf("Created standby pgbackrest config at %s with primary as pg2 (stanza: %s)", configPath, stanzaName)
 
 	// Note: We don't create a new stanza for the standby because:
 	// 1. It's in recovery mode, so pgbackrest won't allow stanza creation

@@ -25,19 +25,30 @@ import (
 	"time"
 )
 
+// PgHost represents a PostgreSQL host configuration for pgBackRest
+type PgHost struct {
+	DataPath  string // Path to PostgreSQL data directory
+	Host      string // PostgreSQL hostname (use "localhost" for TCP connection)
+	Port      int    // PostgreSQL port
+	SocketDir string // PostgreSQL Unix socket directory
+	User      string // PostgreSQL user for connections
+	Database  string // PostgreSQL database for connections
+}
+
 // Config holds the configuration parameters for pgBackRest
 type Config struct {
-	StanzaName    string // Name of the backup stanza (usually service ID or similar)
-	PgDataPath    string // Path to PostgreSQL data directory
-	PgHost        string // PostgreSQL hostname (use "localhost" for TCP connection)
-	PgPort        int    // PostgreSQL port
-	PgSocketDir   string // PostgreSQL Unix socket directory
-	PgUser        string // PostgreSQL user for connections
-	PgPassword    string // PostgreSQL password (for local development only)
-	PgDatabase    string // PostgreSQL database for connections
-	RepoPath      string // Path to backup repository
-	LogPath       string // Path for pgBackRest logs
-	RetentionFull int    // Number of full backups to retain
+	StanzaName      string   // Name of the backup stanza (usually service ID or similar)
+	PgDataPath      string   // Path to PostgreSQL data directory (pg1)
+	PgHost          string   // PostgreSQL hostname (pg1, use "localhost" for TCP connection)
+	PgPort          int      // PostgreSQL port (pg1)
+	PgSocketDir     string   // PostgreSQL Unix socket directory (pg1)
+	PgUser          string   // PostgreSQL user for connections (pg1)
+	PgPassword      string   // PostgreSQL password (for local development only, pg1)
+	PgDatabase      string   // PostgreSQL database for connections (pg1)
+	AdditionalHosts []PgHost // Additional PostgreSQL hosts (pg2, pg3, etc.) for multi-host setups
+	RepoPath        string   // Path to backup repository
+	LogPath         string   // Path for pgBackRest logs
+	RetentionFull   int      // Number of full backups to retain
 }
 
 // GenerateConfig creates a pgBackRest configuration file content
@@ -52,6 +63,8 @@ func GenerateConfig(cfg Config) string {
 
 	// Stanza section
 	sb.WriteString(fmt.Sprintf("[%s]\n", cfg.StanzaName))
+
+	// pg1 (primary host configuration from Config fields)
 	sb.WriteString(fmt.Sprintf("pg1-path=%s\n", cfg.PgDataPath))
 	sb.WriteString(fmt.Sprintf("pg1-port=%d\n", cfg.PgPort))
 
@@ -71,6 +84,27 @@ func GenerateConfig(cfg Config) string {
 	// PostgreSQL trust authentication or peer authentication will be used
 	if cfg.PgDatabase != "" {
 		sb.WriteString(fmt.Sprintf("pg1-database=%s\n", cfg.PgDatabase))
+	}
+
+	// Additional hosts (pg2, pg3, etc.)
+	for i, host := range cfg.AdditionalHosts {
+		pgNum := i + 2 // pg2, pg3, etc.
+		sb.WriteString(fmt.Sprintf("pg%d-path=%s\n", pgNum, host.DataPath))
+		sb.WriteString(fmt.Sprintf("pg%d-port=%d\n", pgNum, host.Port))
+
+		if host.Host != "" {
+			sb.WriteString(fmt.Sprintf("pg%d-host=%s\n", pgNum, host.Host))
+			sb.WriteString(fmt.Sprintf("pg%d-host-type=tcp\n", pgNum))
+		}
+		if host.SocketDir != "" {
+			sb.WriteString(fmt.Sprintf("pg%d-socket-path=%s\n", pgNum, host.SocketDir))
+		}
+		if host.User != "" {
+			sb.WriteString(fmt.Sprintf("pg%d-user=%s\n", pgNum, host.User))
+		}
+		if host.Database != "" {
+			sb.WriteString(fmt.Sprintf("pg%d-database=%s\n", pgNum, host.Database))
+		}
 	}
 
 	// Retention policy
