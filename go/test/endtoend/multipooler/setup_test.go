@@ -35,6 +35,7 @@ import (
 
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
+	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
 	"github.com/multigres/multigres/go/test/endtoend"
 	"github.com/multigres/multigres/go/test/utils"
 	"github.com/multigres/multigres/go/tools/pathutil"
@@ -202,7 +203,7 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 		"--pgctld-addr", p.PgctldAddr,
 		"--pooler-dir", p.DataDir, // Use the same pooler dir as pgctld
 		"--pg-port", strconv.Itoa(p.PgPort),
-		"--service-map", "grpc-pooler,grpc-poolermanager,grpc-consensus",
+		"--service-map", "grpc-pooler,grpc-poolermanager,grpc-consensus,grpc-backup",
 		"--topo-global-server-addresses", p.EtcdAddr,
 		"--topo-global-root", "/multigres/global",
 		"--topo-implementation", "etcd2",
@@ -379,8 +380,57 @@ func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int,
 	}
 }
 
+// setupPgBackRestConfig creates pgbackrest configuration and initializes the stanza
+func setupPgBackRestConfig(t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance) error {
+	t.Helper()
+
+	// Create backup repository directory
+	repoPath := filepath.Join(baseDir, "backup-repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create backup repo: %w", err)
+	}
+
+	// Create pgbackrest log directory
+	logPath := filepath.Join(baseDir, "logs", "pgbackrest")
+	if err := os.MkdirAll(logPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create pgbackrest log dir: %w", err)
+	}
+
+	// Generate pgBackRest config
+	configPath := filepath.Join(pgctld.DataDir, "pgbackrest.conf")
+	backupCfg := pgbackrest.Config{
+		StanzaName:    multipooler.ServiceID,
+		PgDataPath:    filepath.Join(pgctld.DataDir, "pg_data"),
+		PgPort:        pgctld.PgPort,
+		PgSocketDir:   filepath.Join(pgctld.DataDir, "pg_sockets"),
+		PgUser:        "postgres",
+		PgPassword:    "postgres",
+		PgDatabase:    "postgres",
+		RepoPath:      repoPath,
+		LogPath:       logPath,
+		RetentionFull: 2,
+	}
+
+	if err := pgbackrest.WriteConfigFile(configPath, backupCfg); err != nil {
+		return fmt.Errorf("failed to write pgbackrest config: %w", err)
+	}
+
+	t.Logf("Created pgbackrest config at %s", configPath)
+
+	// Initialize pgbackrest stanza
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := pgbackrest.StanzaCreate(ctx, multipooler.ServiceID, configPath); err != nil {
+		return fmt.Errorf("failed to create pgbackrest stanza: %w", err)
+	}
+
+	t.Logf("Initialized pgbackrest stanza: %s", multipooler.ServiceID)
+	return nil
+}
+
 // initializePrimary sets up the primary pgctld, PostgreSQL, consensus term, and multipooler
-func initializePrimary(t *testing.T, pgctld *ProcessInstance, multipooler *ProcessInstance) error {
+func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance) error {
 	t.Helper()
 
 	// Start primary pgctld server
@@ -388,11 +438,74 @@ func initializePrimary(t *testing.T, pgctld *ProcessInstance, multipooler *Proce
 		return fmt.Errorf("failed to start primary pgctld: %w", err)
 	}
 
-	// Initialize and start primary PostgreSQL
+	// Initialize PostgreSQL data directory (but don't start yet)
 	primaryGrpcAddr := fmt.Sprintf("localhost:%d", pgctld.GrpcPort)
-	if err := endtoend.InitAndStartPostgreSQL(t, primaryGrpcAddr); err != nil {
-		return fmt.Errorf("failed to init and start primary PostgreSQL: %w", err)
+	if err := endtoend.InitPostgreSQLDataDir(t, primaryGrpcAddr); err != nil {
+		return fmt.Errorf("failed to init PostgreSQL data dir: %w", err)
 	}
+
+	// Create pgbackrest configuration first (before starting PostgreSQL)
+	repoPath := filepath.Join(baseDir, "backup-repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create backup repo: %w", err)
+	}
+
+	logPath := filepath.Join(baseDir, "logs", "pgbackrest")
+	if err := os.MkdirAll(logPath, 0o755); err != nil {
+		return fmt.Errorf("failed to create pgbackrest log dir: %w", err)
+	}
+
+	configPath := filepath.Join(pgctld.DataDir, "pgbackrest.conf")
+	backupCfg := pgbackrest.Config{
+		StanzaName:    multipooler.ServiceID,
+		PgDataPath:    filepath.Join(pgctld.DataDir, "pg_data"),
+		PgPort:        pgctld.PgPort,
+		PgSocketDir:   filepath.Join(pgctld.DataDir, "pg_sockets"),
+		PgUser:        "postgres",
+		PgPassword:    "postgres",
+		PgDatabase:    "postgres",
+		RepoPath:      repoPath,
+		LogPath:       logPath,
+		RetentionFull: 2,
+	}
+
+	if err := pgbackrest.WriteConfigFile(configPath, backupCfg); err != nil {
+		return fmt.Errorf("failed to write pgbackrest config: %w", err)
+	}
+	t.Logf("Created pgbackrest config at %s", configPath)
+
+	// Add archive_mode configuration to postgresql.auto.conf
+	pgDataDir := filepath.Join(pgctld.DataDir, "pg_data")
+	autoConfPath := filepath.Join(pgDataDir, "postgresql.auto.conf")
+	archiveConfig := fmt.Sprintf(`
+# Archive mode for pgbackrest backups
+archive_mode = on
+archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
+`, multipooler.ServiceID, configPath)
+	f, err := os.OpenFile(autoConfPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("failed to open postgresql.auto.conf: %w", err)
+	}
+	if _, err := f.WriteString(archiveConfig); err != nil {
+		f.Close()
+		return fmt.Errorf("failed to write archive config: %w", err)
+	}
+	f.Close()
+	t.Log("Configured archive_mode in postgresql.auto.conf")
+
+	// Now start PostgreSQL
+	if err := endtoend.StartPostgreSQL(t, primaryGrpcAddr); err != nil {
+		return fmt.Errorf("failed to start PostgreSQL: %w", err)
+	}
+
+	// Initialize pgbackrest stanza (PostgreSQL must be running)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := pgbackrest.StanzaCreate(ctx, multipooler.ServiceID, configPath); err != nil {
+		return fmt.Errorf("failed to create pgbackrest stanza: %w", err)
+	}
+	t.Logf("Initialized pgbackrest stanza: %s", multipooler.ServiceID)
 
 	// Start primary multipooler
 	if err := multipooler.Start(t); err != nil {
@@ -423,7 +536,7 @@ func initializePrimary(t *testing.T, pgctld *ProcessInstance, multipooler *Proce
 		LeaderId:           nil,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 	_, err = client.SetTerm(ctx, &multipoolermanagerdatapb.SetTermRequest{Term: initialTerm})
 	cancel()
 	if err != nil {
@@ -619,8 +732,8 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		standbyMultipooler := createMultipoolerInstance(t, "standby-multipooler", tempDir, standbyMultipoolerPort,
 			fmt.Sprintf("localhost:%d", standbyGrpcPort), standbyPgctld.DataDir, standbyPgctld.PgPort, etcdClientAddr)
 
-		// Initialize primary (pgctld, PostgreSQL, consensus term, multipooler, type)
-		if err := initializePrimary(t, primaryPgctld, primaryMultipooler); err != nil {
+		// Initialize primary (pgctld, PostgreSQL, pgbackrest, consensus term, multipooler, type)
+		if err := initializePrimary(t, tempDir, primaryPgctld, primaryMultipooler); err != nil {
 			setupError = err
 			return
 		}

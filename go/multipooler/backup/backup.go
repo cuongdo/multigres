@@ -79,13 +79,17 @@ func BackupShard(ctx context.Context, configPath, stanzaName string, opts Backup
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "type is required")
 	}
 
-	// Type validation
-	validTypes := map[string]bool{
-		"full":         true,
-		"differential": true,
-		"incremental":  true,
-	}
-	if !validTypes[opts.Type] {
+	// Type validation and mapping to pgbackrest types
+	// pgbackrest uses abbreviated types: full, diff, incr
+	pgBackRestType := ""
+	switch opts.Type {
+	case "full":
+		pgBackRestType = "full"
+	case "differential":
+		pgBackRestType = "diff"
+	case "incremental":
+		pgBackRestType = "incr"
+	default:
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT,
 			fmt.Sprintf("invalid backup type '%s': must be one of: full, differential, incremental", opts.Type))
 	}
@@ -105,7 +109,8 @@ func BackupShard(ctx context.Context, configPath, stanzaName string, opts Backup
 	cmd := exec.CommandContext(ctx, "pgbackrest",
 		"--stanza="+stanzaName,
 		"--config="+configPath,
-		"--type="+opts.Type,
+		"--type="+pgBackRestType,
+		"--log-level-console=info",
 		"backup")
 
 	// Capture output for logging and to extract backup ID

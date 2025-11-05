@@ -67,9 +67,8 @@ func GenerateConfig(cfg Config) string {
 	if cfg.PgUser != "" {
 		sb.WriteString(fmt.Sprintf("pg1-user=%s\n", cfg.PgUser))
 	}
-	if cfg.PgPassword != "" {
-		sb.WriteString(fmt.Sprintf("pg1-password=%s\n", cfg.PgPassword))
-	}
+	// Note: For local Unix socket connections, we don't need to specify password
+	// PostgreSQL trust authentication or peer authentication will be used
 	if cfg.PgDatabase != "" {
 		sb.WriteString(fmt.Sprintf("pg1-database=%s\n", cfg.PgDatabase))
 	}
