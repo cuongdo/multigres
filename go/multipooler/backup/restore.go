@@ -37,45 +37,7 @@ type RestoreResult struct {
 
 // RestoreShardFromBackup restores a shard from a backup
 func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldClient, configPath, stanzaName string, opts RestoreOptions) (*RestoreResult, error) {
-	// TODO: Implement restore logic
-	// This should:
-	// 1. Determine which backup to restore from
-	//    - If opts.BackupID is empty, query pgBackRest to find the latest backup
-	//    - Use "pgbackrest info --output=json" to list available backups
-	//    - Select the most recent backup if BackupID is not specified
-	//
-	// 2. Stop the PostgreSQL server if it's running
-	//    - Check if PostgreSQL is running (e.g., via pg_ctl status or process check)
-	//    - If running, issue a graceful shutdown: pg_ctl stop -D <data_dir> -m fast
-	//    - Wait for the server to stop completely
-	//    - Handle timeout scenarios
-	//
-	// 3. Execute pgBackRest restore command
-	//    - Construct the restore command:
-	//      pgbackrest --stanza=<stanza_name> --delta restore
-	//    - If BackupID is specified, add: --set=<backup_id>
-	//    - The --delta flag allows pgBackRest to preserve valid files and only restore changed/missing ones
-	//    - Execute the command using exec.CommandContext
-	//    - Capture stdout/stderr for logging
-	//    - Monitor for errors and handle appropriately
-	//
-	// 4. Start the PostgreSQL server after restore completes
-	//    - Execute: pg_ctl start -D <data_dir>
-	//    - Wait for PostgreSQL to be ready to accept connections
-	//    - Use a retry mechanism with exponential backoff
-	//
-	// 5. Verify the restore was successful
-	//    - Connect to PostgreSQL and run a simple query (e.g., SELECT 1)
-	//    - Check the restored data directory size/structure
-	//    - Verify that WAL replay is working if this is a standby
-	//    - Log success or failure with detailed information
-	//
-	// 6. Handle error scenarios and rollback if necessary
-	//    - If restore fails, attempt to restart with the old data (if possible)
-	//    - Log all errors with sufficient context for debugging
-	//    - Return appropriate error codes (INTERNAL, FAILED_PRECONDITION, etc.)
-
-	// Validate required configuration
+	// Validate required pgctld client, config path, and stanza name
 	if pgctldClient == nil {
 		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "pgctld_client is required")
 	}
@@ -105,7 +67,8 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 	args := []string{
 		"--stanza=" + stanzaName,
 		"--config=" + configPath,
-		"--delta", // Preserve valid files and only restore changed/missing ones
+		"--log-level-console=info", // Verbose logging to see what pgBackRest is doing
+		"--delta",                  // Preserve valid files and only restore changed/missing ones
 	}
 
 	// If a specific backup ID is specified, add the --set flag
