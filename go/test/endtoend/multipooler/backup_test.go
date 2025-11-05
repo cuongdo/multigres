@@ -56,6 +56,7 @@ func TestBackup_CreateAndList(t *testing.T) {
 	}
 
 	setup := getSharedTestSetup(t)
+	setupPoolerTest(t, setup)
 
 	// Wait for manager to be ready
 	waitForManagerReady(t, setup, setup.PrimaryMultipooler)
@@ -264,6 +265,7 @@ func TestBackup_ValidationErrors(t *testing.T) {
 	}
 
 	setup := getSharedTestSetup(t)
+	setupPoolerTest(t, setup)
 
 	// Wait for manager to be ready
 	waitForManagerReady(t, setup, setup.PrimaryMultipooler)
@@ -348,6 +350,7 @@ func TestBackup_FromStandby(t *testing.T) {
 	}
 
 	setup := getSharedTestSetup(t)
+	setupPoolerTest(t, setup)
 
 	// Wait for standby manager to be ready
 	waitForManagerReady(t, setup, setup.StandbyMultipooler)
@@ -452,6 +455,7 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	}
 
 	setup := getSharedTestSetup(t)
+	setupPoolerTest(t, setup)
 
 	// Wait for manager to be ready
 	waitForManagerReady(t, setup, setup.PrimaryMultipooler)

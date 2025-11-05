@@ -216,7 +216,7 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 
 	// Add stanza name if configured
 	if p.StanzaName != "" {
-		args = append(args, "--pgbackrest-stanza-name", p.StanzaName)
+		args = append(args, "--pgbackrest-stanza", p.StanzaName)
 	}
 
 	// Start the multipooler server

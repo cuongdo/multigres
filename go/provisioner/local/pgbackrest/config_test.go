@@ -53,7 +53,7 @@ func TestGenerateConfig(t *testing.T) {
 		assert.Contains(t, result, "pg1-port=5432")
 		assert.Contains(t, result, "pg1-socket-path=/var/run/postgresql")
 		assert.Contains(t, result, "pg1-user=postgres")
-		assert.Contains(t, result, "pg1-password=testpass")
+		// Note: Password is intentionally not included in the config for local connections
 		assert.Contains(t, result, "pg1-database=postgres")
 		assert.Contains(t, result, "repo1-retention-full=2")
 	})

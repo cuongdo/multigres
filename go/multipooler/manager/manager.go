@@ -275,8 +275,8 @@ func (pm *MultiPoolerManager) GetBackupConfigPath() string {
 // GetBackupStanzaName returns the pgbackrest stanza name
 func (pm *MultiPoolerManager) GetBackupStanzaName() string {
 	// Use configured stanza name if set, otherwise fallback to service ID
-	if pm.config.PgBackRestStanzaName != "" {
-		return pm.config.PgBackRestStanzaName
+	if pm.config.PgBackRestStanza != "" {
+		return pm.config.PgBackRestStanza
 	}
 	return pm.serviceID.Name
 }
