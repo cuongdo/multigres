@@ -322,3 +322,112 @@ func TestBackup_ValidationErrors(t *testing.T) {
 		assert.Contains(t, err.Error(), "invalid", "Error should mention invalid type")
 	})
 }
+
+func TestBackup_FromStandby(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping end-to-end tests in short mode")
+	}
+
+	t.Skip("Backups from standby are currently not supported due to stanza name mismatch. " +
+		"The multipooler manager uses its service ID as the stanza name, but in a replication " +
+		"setup, both primary and standby should share the same stanza. This requires " +
+		"architectural changes to make the stanza name configurable separately from the service ID.")
+
+	setup := getSharedTestSetup(t)
+
+	// Wait for standby manager to be ready
+	waitForManagerReady(t, setup, setup.StandbyMultipooler)
+
+	// Create backup client connection to standby
+	conn, err := grpc.NewClient(
+		fmt.Sprintf("localhost:%d", setup.StandbyMultipooler.GrpcPort),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+	backupClient := backupservicepb.NewMultiPoolerBackupServiceClient(conn)
+
+	t.Run("CreateFullBackupFromStandby", func(t *testing.T) {
+		t.Log("Creating full backup from standby...")
+
+		req := &backupservicepb.BackupShardRequest{
+			TableGroup:   "test",
+			Shard:        "default",
+			ForcePrimary: false, // Should use standby since we're connected to standby
+			Type:         "full",
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		resp, err := backupClient.BackupShard(ctx, req)
+		require.NoError(t, err, "Full backup from standby should succeed")
+		require.NotNil(t, resp, "Response should not be nil")
+
+		// Verify backup ID format
+		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+
+		// Backup ID should match pgbackrest format: YYYYMMDD-HHMMSSF
+		backupIDPattern := regexp.MustCompile(`^\d{8}-\d{6}F$`)
+		assert.True(t, backupIDPattern.MatchString(resp.BackupId),
+			"Backup ID should match format YYYYMMDD-HHMMSSF, got: %s", resp.BackupId)
+
+		t.Logf("Full backup from standby created successfully with ID: %s", resp.BackupId)
+
+		// Verify backup appears in standby's backup list
+		listReq := &backupservicepb.GetShardBackupsRequest{
+			Limit: 10,
+		}
+
+		listCtx := utils.WithShortDeadline(t)
+		listResp, err := backupClient.GetShardBackups(listCtx, listReq)
+		require.NoError(t, err, "Listing backups from standby should succeed")
+		require.NotNil(t, listResp, "List response should not be nil")
+
+		// Verify at least one backup exists
+		assert.NotEmpty(t, listResp.Backups, "Should have at least one backup")
+
+		// Find our backup in the list
+		var foundBackup *backupservicepb.BackupMetadata
+		for _, backup := range listResp.Backups {
+			if backup.BackupId == resp.BackupId {
+				foundBackup = backup
+				break
+			}
+		}
+
+		require.NotNil(t, foundBackup, "Standby backup should be in the list")
+		assert.Equal(t, resp.BackupId, foundBackup.BackupId, "Backup ID should match")
+		assert.Equal(t, backupservicepb.BackupMetadata_COMPLETE, foundBackup.Status,
+			"Backup status should be COMPLETE")
+
+		t.Logf("Standby backup verified in list: ID=%s, Status=%s",
+			foundBackup.BackupId, foundBackup.Status)
+	})
+
+	t.Run("CreateIncrementalBackupFromStandby", func(t *testing.T) {
+		t.Log("Creating incremental backup from standby...")
+
+		req := &backupservicepb.BackupShardRequest{
+			TableGroup:   "test",
+			Shard:        "default",
+			ForcePrimary: false,
+			Type:         "incremental",
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+
+		resp, err := backupClient.BackupShard(ctx, req)
+		require.NoError(t, err, "Incremental backup from standby should succeed")
+		require.NotNil(t, resp, "Response should not be nil")
+
+		assert.NotEmpty(t, resp.BackupId, "Backup ID should not be empty")
+
+		// Incremental backup ID should contain 'I'
+		assert.Contains(t, resp.BackupId, "I",
+			"Incremental backup ID should contain 'I'")
+
+		t.Logf("Incremental backup from standby created successfully with ID: %s", resp.BackupId)
+	})
+}

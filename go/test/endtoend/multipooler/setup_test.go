@@ -561,7 +561,7 @@ archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
 }
 
 // initializeStandby sets up the standby pgctld, PostgreSQL (with replication), consensus term, and multipooler
-func initializeStandby(t *testing.T, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance) error {
+func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance) error {
 	t.Helper()
 
 	// Start standby pgctld server
@@ -583,6 +583,37 @@ func initializeStandby(t *testing.T, primaryPgctld *ProcessInstance, standbyPgct
 	if err := endtoend.StartPostgreSQL(t, standbyGrpcAddr); err != nil {
 		return fmt.Errorf("failed to start standby PostgreSQL: %w", err)
 	}
+
+	// Create pgbackrest configuration for standby
+	// Note: Standby shares the same backup repository and stanza as primary
+	// since they're replicas. However, the multipooler manager will use the standby's
+	// service ID when calling backup functions, which won't match the primary's stanza.
+	// This is a current limitation - backups from standby would need architecture changes.
+	repoPath := filepath.Join(baseDir, "backup-repo")
+	logPath := filepath.Join(baseDir, "logs", "pgbackrest")
+
+	configPath := filepath.Join(standbyPgctld.DataDir, "pgbackrest.conf")
+	backupCfg := pgbackrest.Config{
+		StanzaName:    primaryPgctld.ServiceID, // Use primary's stanza (they're replicas)
+		PgDataPath:    filepath.Join(standbyPgctld.DataDir, "pg_data"),
+		PgPort:        standbyPgctld.PgPort,
+		PgSocketDir:   filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
+		PgUser:        "postgres",
+		PgDatabase:    "postgres",
+		RepoPath:      repoPath,
+		LogPath:       logPath,
+		RetentionFull: 2,
+	}
+
+	if err := pgbackrest.WriteConfigFile(configPath, backupCfg); err != nil {
+		return fmt.Errorf("failed to write standby pgbackrest config: %w", err)
+	}
+	t.Logf("Created standby pgbackrest config at %s (using primary's stanza: %s)", configPath, primaryPgctld.ServiceID)
+
+	// Note: We don't create a new stanza for the standby because:
+	// 1. It's in recovery mode, so pgbackrest won't allow stanza creation
+	// 2. It shares the primary's stanza since they're replicas
+	// 3. The stanza was already created when initializing the primary
 
 	// Start standby multipooler
 	if err := standbyMultipooler.Start(t); err != nil {
@@ -739,7 +770,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		}
 
 		// Initialize standby (pgctld, PostgreSQL with replication, consensus term, multipooler, type)
-		if err := initializeStandby(t, primaryPgctld, standbyPgctld, standbyMultipooler); err != nil {
+		if err := initializeStandby(t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler); err != nil {
 			setupError = err
 			return
 		}
