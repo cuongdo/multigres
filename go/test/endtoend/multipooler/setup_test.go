@@ -134,6 +134,7 @@ type ProcessInstance struct {
 	PgPort      int    // Used by pgctld
 	PgctldAddr  string // Used by multipooler
 	EtcdAddr    string // Used by multipooler for topology
+	StanzaName  string // pgBackRest stanza name (used by multipooler)
 	Process     *exec.Cmd
 	Binary      string
 	Environment []string
@@ -195,8 +196,8 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 
 	t.Logf("Starting %s: binary '%s', gRPC port %d, ServiceID %s", p.Name, p.Binary, p.GrpcPort, p.ServiceID)
 
-	// Start the multipooler server
-	p.Process = exec.Command(p.Binary,
+	// Build command arguments
+	args := []string{
 		"--grpc-port", strconv.Itoa(p.GrpcPort),
 		"--database", "postgres", // Required parameter
 		"--table-group", "test", // Required parameter
@@ -210,7 +211,16 @@ func (p *ProcessInstance) startMultipooler(t *testing.T) error {
 		"--cell", "test-cell",
 		"--service-id", p.ServiceID,
 		"--log-output", p.LogFile,
-		"--test-orphan-detection")
+		"--test-orphan-detection",
+	}
+
+	// Add stanza name if configured
+	if p.StanzaName != "" {
+		args = append(args, "--pgbackrest-stanza-name", p.StanzaName)
+	}
+
+	// Start the multipooler server
+	p.Process = exec.Command(p.Binary, args...)
 	p.Process.Env = p.Environment
 
 	t.Logf("Running multipooler command: %v", p.Process.Args)
@@ -358,7 +368,7 @@ func createPgctldInstance(t *testing.T, name, baseDir string, grpcPort, pgPort i
 }
 
 // createMultipoolerInstance creates a new multipooler instance configuration
-func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int, pgctldAddr string, pgctldDataDir string, pgPort int, etcdAddr string) *ProcessInstance {
+func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int, pgctldAddr string, pgctldDataDir string, pgPort int, etcdAddr string, stanzaName string) *ProcessInstance {
 	t.Helper()
 
 	logFile := filepath.Join(baseDir, name, "multipooler.log")
@@ -375,13 +385,14 @@ func createMultipoolerInstance(t *testing.T, name, baseDir string, grpcPort int,
 		PgctldAddr:  pgctldAddr,
 		DataDir:     pgctldDataDir, // Use the same data dir as pgctld for pooler-dir
 		EtcdAddr:    etcdAddr,
+		StanzaName:  stanzaName,    // pgBackRest stanza name
 		Binary:      "multipooler", // Assume binary is in PATH
 		Environment: append(os.Environ(), "PGCONNECT_TIMEOUT=5"),
 	}
 }
 
 // setupPgBackRestConfig creates pgbackrest configuration and initializes the stanza
-func setupPgBackRestConfig(t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance) error {
+func setupPgBackRestConfig(t *testing.T, baseDir string, pgctld *ProcessInstance, stanzaName string) error {
 	t.Helper()
 
 	// Create backup repository directory
@@ -399,7 +410,7 @@ func setupPgBackRestConfig(t *testing.T, baseDir string, pgctld *ProcessInstance
 	// Generate pgBackRest config
 	configPath := filepath.Join(pgctld.DataDir, "pgbackrest.conf")
 	backupCfg := pgbackrest.Config{
-		StanzaName:    multipooler.ServiceID,
+		StanzaName:    stanzaName,
 		PgDataPath:    filepath.Join(pgctld.DataDir, "pg_data"),
 		PgPort:        pgctld.PgPort,
 		PgSocketDir:   filepath.Join(pgctld.DataDir, "pg_sockets"),
@@ -421,16 +432,16 @@ func setupPgBackRestConfig(t *testing.T, baseDir string, pgctld *ProcessInstance
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := pgbackrest.StanzaCreate(ctx, multipooler.ServiceID, configPath); err != nil {
+	if err := pgbackrest.StanzaCreate(ctx, stanzaName, configPath); err != nil {
 		return fmt.Errorf("failed to create pgbackrest stanza: %w", err)
 	}
 
-	t.Logf("Initialized pgbackrest stanza: %s", multipooler.ServiceID)
+	t.Logf("Initialized pgbackrest stanza: %s", stanzaName)
 	return nil
 }
 
 // initializePrimary sets up the primary pgctld, PostgreSQL, consensus term, and multipooler
-func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance) error {
+func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, multipooler *ProcessInstance, stanzaName string) error {
 	t.Helper()
 
 	// Start primary pgctld server
@@ -457,7 +468,7 @@ func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, mu
 
 	configPath := filepath.Join(pgctld.DataDir, "pgbackrest.conf")
 	backupCfg := pgbackrest.Config{
-		StanzaName:    multipooler.ServiceID,
+		StanzaName:    stanzaName,
 		PgDataPath:    filepath.Join(pgctld.DataDir, "pg_data"),
 		PgPort:        pgctld.PgPort,
 		PgSocketDir:   filepath.Join(pgctld.DataDir, "pg_sockets"),
@@ -481,7 +492,7 @@ func initializePrimary(t *testing.T, baseDir string, pgctld *ProcessInstance, mu
 # Archive mode for pgbackrest backups
 archive_mode = on
 archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
-`, multipooler.ServiceID, configPath)
+`, stanzaName, configPath)
 	f, err := os.OpenFile(autoConfPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return fmt.Errorf("failed to open postgresql.auto.conf: %w", err)
@@ -502,10 +513,10 @@ archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	if err := pgbackrest.StanzaCreate(ctx, multipooler.ServiceID, configPath); err != nil {
+	if err := pgbackrest.StanzaCreate(ctx, stanzaName, configPath); err != nil {
 		return fmt.Errorf("failed to create pgbackrest stanza: %w", err)
 	}
-	t.Logf("Initialized pgbackrest stanza: %s", multipooler.ServiceID)
+	t.Logf("Initialized pgbackrest stanza: %s", stanzaName)
 
 	// Start primary multipooler
 	if err := multipooler.Start(t); err != nil {
@@ -561,7 +572,7 @@ archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
 }
 
 // initializeStandby sets up the standby pgctld, PostgreSQL (with replication), consensus term, and multipooler
-func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance) error {
+func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance, stanzaName string) error {
 	t.Helper()
 
 	// Start standby pgctld server
@@ -586,15 +597,14 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 
 	// Create pgbackrest configuration for standby
 	// Note: Standby shares the same backup repository and stanza as primary
-	// since they're replicas. However, the multipooler manager will use the standby's
-	// service ID when calling backup functions, which won't match the primary's stanza.
-	// This is a current limitation - backups from standby would need architecture changes.
+	// since they're replicas. With the configurable stanza name, both primary
+	// and standby multipoolers will use the same stanza name.
 	repoPath := filepath.Join(baseDir, "backup-repo")
 	logPath := filepath.Join(baseDir, "logs", "pgbackrest")
 
 	configPath := filepath.Join(standbyPgctld.DataDir, "pgbackrest.conf")
 	backupCfg := pgbackrest.Config{
-		StanzaName:    primaryPgctld.ServiceID, // Use primary's stanza (they're replicas)
+		StanzaName:    stanzaName, // Use same stanza as primary (they're replicas)
 		PgDataPath:    filepath.Join(standbyPgctld.DataDir, "pg_data"),
 		PgPort:        standbyPgctld.PgPort,
 		PgSocketDir:   filepath.Join(standbyPgctld.DataDir, "pg_sockets"),
@@ -758,19 +768,23 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		primaryPgctld := createPgctldInstance(t, "primary", tempDir, primaryGrpcPort, primaryPgPort)
 		standbyPgctld := createPgctldInstance(t, "standby", tempDir, standbyGrpcPort, standbyPgPort)
 
+		// Use a shared stanza name for the test setup
+		// This allows both primary and standby to use the same pgBackRest stanza
+		stanzaName := "test_backup"
+
 		primaryMultipooler := createMultipoolerInstance(t, "primary-multipooler", tempDir, primaryMultipoolerPort,
-			fmt.Sprintf("localhost:%d", primaryGrpcPort), primaryPgctld.DataDir, primaryPgctld.PgPort, etcdClientAddr)
+			fmt.Sprintf("localhost:%d", primaryGrpcPort), primaryPgctld.DataDir, primaryPgctld.PgPort, etcdClientAddr, stanzaName)
 		standbyMultipooler := createMultipoolerInstance(t, "standby-multipooler", tempDir, standbyMultipoolerPort,
-			fmt.Sprintf("localhost:%d", standbyGrpcPort), standbyPgctld.DataDir, standbyPgctld.PgPort, etcdClientAddr)
+			fmt.Sprintf("localhost:%d", standbyGrpcPort), standbyPgctld.DataDir, standbyPgctld.PgPort, etcdClientAddr, stanzaName)
 
 		// Initialize primary (pgctld, PostgreSQL, pgbackrest, consensus term, multipooler, type)
-		if err := initializePrimary(t, tempDir, primaryPgctld, primaryMultipooler); err != nil {
+		if err := initializePrimary(t, tempDir, primaryPgctld, primaryMultipooler, stanzaName); err != nil {
 			setupError = err
 			return
 		}
 
 		// Initialize standby (pgctld, PostgreSQL with replication, consensus term, multipooler, type)
-		if err := initializeStandby(t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler); err != nil {
+		if err := initializeStandby(t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName); err != nil {
 			setupError = err
 			return
 		}

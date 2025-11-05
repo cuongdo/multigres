@@ -328,10 +328,11 @@ func TestBackup_FromStandby(t *testing.T) {
 		t.Skip("Skipping end-to-end tests in short mode")
 	}
 
-	t.Skip("Backups from standby are currently not supported due to stanza name mismatch. " +
-		"The multipooler manager uses its service ID as the stanza name, but in a replication " +
-		"setup, both primary and standby should share the same stanza. This requires " +
-		"architectural changes to make the stanza name configurable separately from the service ID.")
+	t.Skip("Backups from standby require additional pgBackRest configuration. " +
+		"While the stanza name is now correctly shared between primary and standby, " +
+		"pgBackRest needs both pg1-* (standby) and pg2-* (primary) settings in the standby's " +
+		"config to perform backups from standby. This requires architectural changes to " +
+		"generate multi-host pgbackrest.conf files.")
 
 	setup := getSharedTestSetup(t)
 

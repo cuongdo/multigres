@@ -780,6 +780,7 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 		"--pooler-dir", poolerDir,
 		"--pg-port", fmt.Sprintf("%d", pgPort),
 		"--hostname", "localhost",
+		"--pgbackrest-stanza-name", "multigres",
 	}
 
 	// Add socket file if configured
