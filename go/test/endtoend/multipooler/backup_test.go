@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -457,21 +458,31 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	setup := getSharedTestSetup(t)
 	setupPoolerTest(t, setup)
 
-	// Wait for manager to be ready
+	// Wait for both primary and standby managers to be ready
 	waitForManagerReady(t, setup, setup.PrimaryMultipooler)
+	waitForManagerReady(t, setup, setup.StandbyMultipooler)
 
-	// Create backup client connection
-	conn, err := grpc.NewClient(
+	// Create backup client connection to primary (for creating backup)
+	primaryConn, err := grpc.NewClient(
 		fmt.Sprintf("localhost:%d", setup.PrimaryMultipooler.GrpcPort),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
-	backupClient := backupservicepb.NewMultiPoolerBackupServiceClient(conn)
+	t.Cleanup(func() { primaryConn.Close() })
+	primaryBackupClient := backupservicepb.NewMultiPoolerBackupServiceClient(primaryConn)
 
-	// Connect to PostgreSQL database using Unix socket
-	socketDir := filepath.Join(setup.PrimaryPgctld.DataDir, "pg_sockets")
-	db := connectToPostgres(t, socketDir, setup.PrimaryPgctld.PgPort)
+	// Create backup client connection to standby (for restore)
+	standbyConn, err := grpc.NewClient(
+		fmt.Sprintf("localhost:%d", setup.StandbyMultipooler.GrpcPort),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { standbyConn.Close() })
+	standbyBackupClient := backupservicepb.NewMultiPoolerBackupServiceClient(standbyConn)
+
+	// Connect to primary PostgreSQL database using Unix socket
+	primarySocketDir := filepath.Join(setup.PrimaryPgctld.DataDir, "pg_sockets")
+	db := connectToPostgres(t, primarySocketDir, setup.PrimaryPgctld.PgPort)
 	defer db.Close()
 
 	t.Log("Step 1: Creating test table and inserting initial data...")
@@ -500,7 +511,7 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	assert.Equal(t, len(initialRows), countBefore, "Initial row count should match")
 	t.Logf("Inserted %d initial rows", countBefore)
 
-	t.Log("Step 2: Creating full backup...")
+	t.Log("Step 2: Creating full backup from primary...")
 
 	req := &backupservicepb.BackupShardRequest{
 		TableGroup:   "test",
@@ -512,7 +523,7 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	backupResp, err := backupClient.BackupShard(ctx, req)
+	backupResp, err := primaryBackupClient.BackupShard(ctx, req)
 	require.NoError(t, err, "Backup should succeed")
 	require.NotNil(t, backupResp, "Backup response should not be nil")
 	require.NotEmpty(t, backupResp.BackupId, "Backup ID should not be empty")
@@ -520,14 +531,14 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	backupID := backupResp.BackupId
 	t.Logf("Backup created with ID: %s", backupID)
 
-	t.Log("Step 3: Verifying backup exists in list...")
+	t.Log("Step 3: Verifying backup exists in standby's list...")
 
 	listReq := &backupservicepb.GetShardBackupsRequest{
 		Limit: 20,
 	}
 
 	listCtx := utils.WithShortDeadline(t)
-	listResp, err := backupClient.GetShardBackups(listCtx, listReq)
+	listResp, err := standbyBackupClient.GetShardBackups(listCtx, listReq)
 	require.NoError(t, err, "Listing backups should succeed")
 	require.NotNil(t, listResp, "List response should not be nil")
 
@@ -563,7 +574,7 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 		"Count should include both initial and additional rows")
 	t.Logf("Row count after additional inserts: %d", countAfterInsert)
 
-	t.Log("Step 5: Restoring from backup...")
+	t.Log("Step 5: Restoring from backup to standby...")
 
 	restoreReq := &backupservicepb.RestoreShardFromBackupRequest{
 		BackupId: backupID,
@@ -572,27 +583,25 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer restoreCancel()
 
-	_, err = backupClient.RestoreShardFromBackup(restoreCtx, restoreReq)
-	require.NoError(t, err, "Restore should succeed")
-	t.Log("Restore completed successfully")
-
-	// Close existing connection and reconnect after restore
-	db.Close()
+	_, err = standbyBackupClient.RestoreShardFromBackup(restoreCtx, restoreReq)
+	require.NoError(t, err, "Restore to standby should succeed")
+	t.Log("Restore to standby completed successfully")
 
 	// Wait a bit for PostgreSQL to be ready after restore
 	time.Sleep(5 * time.Second)
 
-	// Reconnect to the database
-	db = connectToPostgres(t, socketDir, setup.PrimaryPgctld.PgPort)
-	defer db.Close()
+	// Connect to the standby database after restore
+	standbySocketDir := filepath.Join(setup.StandbyPgctld.DataDir, "pg_sockets")
+	standbyDB := connectToPostgres(t, standbySocketDir, setup.StandbyPgctld.PgPort)
+	defer standbyDB.Close()
 
-	t.Log("Step 6: Verifying database is accessible after restore...")
+	t.Log("Step 6: Verifying standby database is accessible after restore...")
 
-	// Verify database is accessible and we can query data
+	// Verify standby database is accessible and we can query data
 	var countAfterRestore int
-	err = db.QueryRow("SELECT COUNT(*) FROM backup_restore_test").Scan(&countAfterRestore)
+	err = standbyDB.QueryRow("SELECT COUNT(*) FROM backup_restore_test").Scan(&countAfterRestore)
 	require.NoError(t, err)
-	t.Logf("Row count after restore: %d", countAfterRestore)
+	t.Logf("Row count on standby after restore: %d", countAfterRestore)
 
 	// TODO: Point-in-time recovery (stopping WAL replay at the backup point) requires additional work.
 	// Currently, PostgreSQL replays all available WAL after restore, which brings the database
@@ -602,39 +611,62 @@ func TestBackup_RestoreDataIntegrity(t *testing.T) {
 	// - Or manually configure PostgreSQL recovery settings after pgBackRest completes
 	//
 	// For now, this test verifies that:
-	// - Backup is created successfully
+	// - Backup is created successfully from primary
 	// - Backup exists in the list
-	// - Restore completes without errors
-	// - PostgreSQL starts successfully after restore
-	// - Database is accessible and queryable after restore
-	// - Replication continues to work after restore
+	// - Restore to standby completes without errors
+	// - PostgreSQL standby starts successfully after restore
+	// - Standby database is accessible and queryable after restore
+	// - Replication from primary to standby continues to work after restore
 	//
 	// These are the core requirements for a working backup/restore system.
 	// The point-in-time recovery feature can be added in a future enhancement.
 
-	t.Logf("✓ Restore completed and database is accessible")
-	t.Logf("✓ Found %d rows in restored database", countAfterRestore)
+	t.Logf("✓ Restore completed and standby database is accessible")
+	t.Logf("✓ Found %d rows in restored standby database", countAfterRestore)
 
-	t.Log("Step 7: Verifying replication still works...")
+	t.Log("Step 7: Verifying replication from primary to standby still works...")
 
-	// Insert a new row after restore to test replication
+	// Insert a new row on primary after restore to test replication
 	testData := "row_after_restore"
 	_, err = db.Exec("INSERT INTO backup_restore_test (data) VALUES ($1)", testData)
-	require.NoError(t, err, "Should be able to insert data after restore")
+	require.NoError(t, err, "Should be able to insert data on primary after restore")
 
-	// Wait for replication
-	time.Sleep(2 * time.Second)
-
-	// Verify the new row exists
+	// Wait for replication to standby (with retry logic)
 	var newRowExists bool
-	err = db.QueryRow("SELECT EXISTS(SELECT 1 FROM backup_restore_test WHERE data = $1)", testData).Scan(&newRowExists)
+	maxAttempts := 10
+	found := false
+	for i := 0; i < maxAttempts; i++ {
+		time.Sleep(1 * time.Second)
+		err = standbyDB.QueryRow("SELECT EXISTS(SELECT 1 FROM backup_restore_test WHERE data = $1)", testData).Scan(&newRowExists)
+		if err == nil && newRowExists {
+			found = true
+			t.Logf("Replication working: new row appeared on standby after %d seconds", i+1)
+			break
+		}
+	}
 	require.NoError(t, err)
-	assert.True(t, newRowExists, "New row should exist after restore")
+	assert.True(t, found, "New row should exist on standby after restore (waited %d seconds)", maxAttempts)
+
+	t.Log("Step 8: Verifying standby is still in recovery mode...")
+
+	// Verify that the standby is still acting as a replica (in recovery mode)
+	var isInRecovery bool
+	err = standbyDB.QueryRow("SELECT pg_is_in_recovery()").Scan(&isInRecovery)
+	require.NoError(t, err, "Should be able to query recovery status")
+	t.Logf("pg_is_in_recovery() returned: %v", isInRecovery)
+
+	// Check if standby.signal exists
+	standbySignalPath := filepath.Join(setup.StandbyPgctld.DataDir, "pg_data", "standby.signal")
+	_, statErr := os.Stat(standbySignalPath)
+	t.Logf("standby.signal exists: %v (path: %s)", statErr == nil, standbySignalPath)
+
+	assert.True(t, isInRecovery, "Standby should still be in recovery mode after restore")
 
 	t.Log("All backup and restore tests passed!")
-	t.Logf("✓ Backup created: %s", backupID)
-	t.Logf("✓ Backup verified in list")
-	t.Logf("✓ Restore completed successfully")
-	t.Logf("✓ Database accessible after restore")
-	t.Logf("✓ Replication working after restore")
+	t.Logf("✓ Backup created from primary: %s", backupID)
+	t.Logf("✓ Backup verified in standby's list")
+	t.Logf("✓ Restore to standby completed successfully")
+	t.Logf("✓ Standby database accessible after restore")
+	t.Logf("✓ Replication from primary to standby working after restore")
+	t.Logf("✓ Standby still in recovery mode (pg_is_in_recovery() = %t)", isInRecovery)
 }

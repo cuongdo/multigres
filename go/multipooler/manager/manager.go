@@ -286,6 +286,11 @@ func (pm *MultiPoolerManager) GetPgCtldClient() pgctldpb.PgCtldClient {
 	return pm.pgctldClient
 }
 
+// IsPrimary returns true if this instance is running as a primary (not standby)
+func (pm *MultiPoolerManager) IsPrimary() bool {
+	return pm.replTracker.IsPrimary()
+}
+
 // checkReady returns an error if the manager is not in Ready state
 func (pm *MultiPoolerManager) checkReady() error {
 	pm.mu.Lock()

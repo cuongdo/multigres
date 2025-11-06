@@ -17,10 +17,13 @@ package grpcbackupservice
 
 import (
 	"context"
+	"log/slog"
+	"path/filepath"
 
 	"github.com/multigres/multigres/go/mterrors"
 	"github.com/multigres/multigres/go/multipooler/backup"
 	"github.com/multigres/multigres/go/multipooler/manager"
+	mtrpcpb "github.com/multigres/multigres/go/pb/mtrpc"
 	backupservicepb "github.com/multigres/multigres/go/pb/multipoolerbackupservice"
 	"github.com/multigres/multigres/go/servenv"
 )
@@ -66,12 +69,58 @@ func (s *backupService) BackupShard(ctx context.Context, req *backupservicepb.Ba
 
 // RestoreShardFromBackup restores a shard from a backup
 func (s *backupService) RestoreShardFromBackup(ctx context.Context, req *backupservicepb.RestoreShardFromBackupRequest) (*backupservicepb.RestoreShardFromBackupResponse, error) {
+	slog.Info("RestoreShardFromBackup called", "backup_id", req.BackupId)
+
 	pgctldClient := s.manager.GetPgCtldClient()
 	configPath := s.manager.GetBackupConfigPath()
 	stanzaName := s.manager.GetBackupStanzaName()
 
-	_, err := backup.RestoreShardFromBackup(ctx, pgctldClient, configPath, stanzaName, backup.RestoreOptions{
-		BackupID: req.BackupId,
+	// Get pg_data directory from the backup config path
+	// configPath is like /path/to/pooler_dir/pgbackrest.conf, so we get the dir and append pg_data
+	poolerDir := filepath.Dir(configPath)
+	pgDataDir := filepath.Join(poolerDir, "pg_data")
+
+	// Determine if we should maintain standby status after restore
+	// We query PostgreSQL directly to get the current recovery status
+	// (checking the cached IsPrimary() value is unreliable as it doesn't update after restore)
+	slog.Info("Checking recovery status before restore")
+	isPrimary, err := s.manager.IsPrimaryDB(ctx)
+	if err != nil {
+		slog.Error("Failed to check recovery status before restore", "error", err)
+		return nil, mterrors.ToGRPC(mterrors.Wrap(err, "failed to check recovery status"))
+	}
+
+	asStandby := !isPrimary
+
+	// If this is a standby, get the current primary connection info
+	// so we can restore it after pgbackrest overwrites postgresql.auto.conf
+	var primaryHost string
+	var primaryPort int32
+	if asStandby {
+		replStatus, err := s.manager.ReplicationStatus(ctx)
+		if err != nil {
+			slog.Error("Failed to get replication status", "error", err)
+			return nil, mterrors.ToGRPC(mterrors.Wrap(err, "failed to get replication status"))
+		}
+		if replStatus == nil || replStatus.PrimaryConnInfo == nil || replStatus.PrimaryConnInfo.Host == "" {
+			return nil, mterrors.ToGRPC(mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "standby has no primary connection configured"))
+		}
+		primaryHost = replStatus.PrimaryConnInfo.Host
+		primaryPort = replStatus.PrimaryConnInfo.Port
+	}
+
+	slog.Info("Restore parameters determined",
+		"is_primary", isPrimary,
+		"as_standby", asStandby,
+		"primary_host", primaryHost,
+		"primary_port", primaryPort,
+		"backup_id", req.BackupId)
+
+	_, err = backup.RestoreShardFromBackup(ctx, pgctldClient, configPath, stanzaName, pgDataDir, backup.RestoreOptions{
+		BackupID:    req.BackupId,
+		AsStandby:   asStandby,
+		PrimaryHost: primaryHost,
+		PrimaryPort: primaryPort,
 	})
 	if err != nil {
 		return nil, mterrors.ToGRPC(err)

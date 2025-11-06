@@ -42,6 +42,7 @@ func TestRestoreShardFromBackup_Validation(t *testing.T) {
 		client      pgctldpb.PgCtldClient
 		configPath  string
 		stanzaName  string
+		pgDataDir   string
 		opts        RestoreOptions
 		expectError bool
 		errorMsg    string
@@ -51,6 +52,7 @@ func TestRestoreShardFromBackup_Validation(t *testing.T) {
 			client:      client,
 			configPath:  "/tmp/test.conf",
 			stanzaName:  "test-stanza",
+			pgDataDir:   "/tmp/test/pg_data",
 			opts:        RestoreOptions{BackupID: "20250104-100000F"},
 			expectError: false,
 		},
@@ -59,6 +61,7 @@ func TestRestoreShardFromBackup_Validation(t *testing.T) {
 			client:      client,
 			configPath:  "/tmp/test.conf",
 			stanzaName:  "test-stanza",
+			pgDataDir:   "/tmp/test/pg_data",
 			opts:        RestoreOptions{BackupID: ""},
 			expectError: false,
 		},
@@ -67,6 +70,7 @@ func TestRestoreShardFromBackup_Validation(t *testing.T) {
 			client:      nil,
 			configPath:  "/tmp/test.conf",
 			stanzaName:  "test-stanza",
+			pgDataDir:   "/tmp/test/pg_data",
 			opts:        RestoreOptions{},
 			expectError: true,
 			errorMsg:    "pgctld_client is required",
@@ -76,6 +80,7 @@ func TestRestoreShardFromBackup_Validation(t *testing.T) {
 			client:      client,
 			configPath:  "",
 			stanzaName:  "test-stanza",
+			pgDataDir:   "/tmp/test/pg_data",
 			opts:        RestoreOptions{},
 			expectError: true,
 			errorMsg:    "config_path is required",
@@ -85,15 +90,26 @@ func TestRestoreShardFromBackup_Validation(t *testing.T) {
 			client:      client,
 			configPath:  "/tmp/test.conf",
 			stanzaName:  "",
+			pgDataDir:   "/tmp/test/pg_data",
 			opts:        RestoreOptions{},
 			expectError: true,
 			errorMsg:    "stanza_name is required",
+		},
+		{
+			name:        "Missing pg_data_dir",
+			client:      client,
+			configPath:  "/tmp/test.conf",
+			stanzaName:  "test-stanza",
+			pgDataDir:   "",
+			opts:        RestoreOptions{},
+			expectError: true,
+			errorMsg:    "pg_data_dir is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result, err := RestoreShardFromBackup(ctx, tt.client, tt.configPath, tt.stanzaName, tt.opts)
+			result, err := RestoreShardFromBackup(ctx, tt.client, tt.configPath, tt.stanzaName, tt.pgDataDir, tt.opts)
 
 			if tt.expectError {
 				assert.Error(t, err)
@@ -135,13 +151,14 @@ func TestRestoreShardFromBackup_PgctldInteraction(t *testing.T) {
 	// Use temp directory for config
 	configPath := t.TempDir() + "/pgbackrest.conf"
 	stanzaName := "test-stanza"
+	pgDataDir := t.TempDir() + "/pg_data"
 
 	opts := RestoreOptions{
 		BackupID: "20250104-100000F",
 	}
 
 	// Call restore (will fail because pgbackrest won't work, but we can verify pgctld calls)
-	_, err := RestoreShardFromBackup(ctx, client, configPath, stanzaName, opts)
+	_, err := RestoreShardFromBackup(ctx, client, configPath, stanzaName, pgDataDir, opts)
 
 	// The restore will fail, but we want to verify the restore flow attempted to interact with pgctld
 	// In a test environment with bufconn, the gRPC calls may fail with connection errors

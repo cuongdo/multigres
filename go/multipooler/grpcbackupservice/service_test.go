@@ -264,9 +264,8 @@ func TestBackupService_RestoreShardFromBackup(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		mterr := mterrors.FromGRPC(err)
-		assert.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(mterr))
-		assert.Contains(t, err.Error(), "pgbackrest")
+		// Now fails earlier when checking recovery status (before pgbackrest is called)
+		assert.Contains(t, err.Error(), "database connection not established")
 	})
 
 	t.Run("RestoreShardFromBackup with empty backup_id fails without PostgreSQL", func(t *testing.T) {
@@ -278,8 +277,8 @@ func TestBackupService_RestoreShardFromBackup(t *testing.T) {
 
 		assert.Error(t, err)
 		assert.Nil(t, resp)
-		mterr := mterrors.FromGRPC(err)
-		assert.Equal(t, mtrpcpb.Code_INTERNAL, mterrors.Code(mterr))
+		// Now fails earlier when checking recovery status (before pgbackrest is called)
+		assert.Contains(t, err.Error(), "database connection not established")
 	})
 }
 
@@ -452,7 +451,8 @@ func TestBackupService_AllMethods(t *testing.T) {
 				_, err := svc.RestoreShardFromBackup(ctx, req)
 				return err
 			},
-			expectedCode: mtrpcpb.Code_INTERNAL,
+			// Now fails when checking recovery status (no DB connection), not at pgbackrest execution
+			expectedCode: mtrpcpb.Code_UNKNOWN,
 		},
 	}
 
