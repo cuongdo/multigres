@@ -61,7 +61,7 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 	}
 
 	// Step 1: Stop PostgreSQL server
-	slog.Info("Stopping PostgreSQL before restore", "backup_id", opts.BackupID)
+	slog.InfoContext(ctx, "Stopping PostgreSQL before restore", "backup_id", opts.BackupID)
 	stopCtx, stopCancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer stopCancel()
 
@@ -72,9 +72,10 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 		return nil, mterrors.New(mtrpcpb.Code_INTERNAL,
 			fmt.Sprintf("failed to stop PostgreSQL: %v", err))
 	}
-	slog.Info("PostgreSQL stopped successfully")
+	slog.InfoContext(ctx, "PostgreSQL stopped successfully")
 
-	// Step 2: Execute pgBackRest restore command
+	// Step 2: Execute pgBackRest restore command, which does most of the work
+	// of writing necessary configuration to postgresql.auto.conf
 	restoreCtx, restoreCancel := context.WithTimeout(ctx, 30*time.Minute) // Restores can take a long time
 	defer restoreCancel()
 
@@ -108,7 +109,7 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 	// (pgbackrest restore overwrites postgresql.auto.conf, removing replication settings)
 	if opts.AsStandby {
 		autoConfPath := filepath.Join(pgDataDir, "postgresql.auto.conf")
-		slog.Info("Restoring primary_conninfo to postgresql.auto.conf",
+		slog.InfoContext(ctx, "Restoring primary_conninfo to postgresql.auto.conf",
 			"path", autoConfPath,
 			"primary_host", opts.PrimaryHost,
 			"primary_port", opts.PrimaryPort)
@@ -116,7 +117,7 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 		// Read existing content to preserve other settings
 		existingContent, err := os.ReadFile(autoConfPath)
 		if err != nil && !os.IsNotExist(err) {
-			slog.Warn("Failed to read existing postgresql.auto.conf", "error", err)
+			slog.WarnContext(ctx, "Failed to read existing postgresql.auto.conf", "error", err)
 			existingContent = []byte{}
 		}
 
@@ -132,7 +133,7 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 				fmt.Sprintf("failed to write primary_conninfo to postgresql.auto.conf: %v", err))
 		}
 
-		slog.Info("Successfully restored primary_conninfo to postgresql.auto.conf")
+		slog.InfoContext(ctx, "Successfully restored primary_conninfo to postgresql.auto.conf")
 	}
 
 	// Step 3: Restart PostgreSQL server after successful restore
@@ -140,7 +141,7 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 	restartCtx, restartCancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer restartCancel()
 
-	slog.Info("Restarting PostgreSQL after restore",
+	slog.InfoContext(ctx, "Restarting PostgreSQL after restore",
 		"as_standby", opts.AsStandby,
 		"backup_id", opts.BackupID)
 
@@ -152,7 +153,7 @@ func RestoreShardFromBackup(ctx context.Context, pgctldClient pgctldpb.PgCtldCli
 			fmt.Sprintf("failed to restart PostgreSQL after restore: %v", err))
 	}
 
-	slog.Info("PostgreSQL restarted successfully after restore")
+	slog.InfoContext(ctx, "PostgreSQL restarted successfully after restore")
 
 	return &RestoreResult{}, nil
 }
