@@ -59,11 +59,12 @@ func (s *MultiAdminServer) findPrimaryPoolerID(ctx context.Context, database, ta
 	// Search each cell for poolers matching the database/tableGroup/shard
 	for _, cell := range cells {
 		// Use GetMultiPoolersByCell with filtering options
+		// Note: Shard can be empty for non-sharded deployments
 		opt := &topo.GetMultiPoolersByCellOptions{
 			DatabaseShard: &topo.DatabaseShard{
 				Database:   database,
 				TableGroup: tableGroup,
-				Shard:      shard,
+				Shard:      shard, // Empty shard matches all shards
 			},
 		}
 

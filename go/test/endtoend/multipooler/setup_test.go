@@ -17,6 +17,7 @@ package multipooler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -33,6 +34,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	adminserver "github.com/multigres/multigres/go/admin/server"
 	"github.com/multigres/multigres/go/clustermetadata/topo"
 	"github.com/multigres/multigres/go/cmd/pgctld/testutil"
 	"github.com/multigres/multigres/go/provisioner/local/pgbackrest"
@@ -41,6 +43,7 @@ import (
 	"github.com/multigres/multigres/go/tools/pathutil"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	multiadminpb "github.com/multigres/multigres/go/pb/multiadmin"
 	multipoolermanagerpb "github.com/multigres/multigres/go/pb/multipoolermanager"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
 	"github.com/multigres/multigres/go/pb/pgctldservice"
@@ -568,7 +571,7 @@ archive_command = 'pgbackrest --stanza=%s --config=%s archive-push %%p'
 }
 
 // initializeStandby sets up the standby pgctld, PostgreSQL (with replication), consensus term, and multipooler
-func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance, stanzaName string) error {
+func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, standbyMultipooler *ProcessInstance, stanzaName string, ts topo.Store) error {
 	t.Helper()
 
 	// Start standby pgctld server
@@ -576,22 +579,31 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 		return fmt.Errorf("failed to start standby pgctld: %w", err)
 	}
 
-	// Initialize standby data directory (but don't start yet)
-	standbyGrpcAddr := fmt.Sprintf("localhost:%d", standbyPgctld.GrpcPort)
-	if err := endtoend.InitPostgreSQLDataDir(t, standbyGrpcAddr); err != nil {
-		return fmt.Errorf("failed to init standby data dir: %w", err)
+	// Don't initialize standby data directory yet - it will be created by restore
+
+	// Start standby multipooler BEFORE backup/restore so it can register in topology
+	// The multipooler can start without PostgreSQL being initialized
+	if err := standbyMultipooler.Start(t); err != nil {
+		return fmt.Errorf("failed to start standby multipooler: %w", err)
 	}
 
-	// Configure standby as a replica using pg_basebackup
-	t.Logf("Configuring standby as replica of primary...")
-	setupStandbyReplication(t, primaryPgctld, standbyPgctld)
-
-	// Start standby PostgreSQL (now configured as replica)
-	if err := endtoend.StartPostgreSQL(t, standbyGrpcAddr); err != nil {
-		return fmt.Errorf("failed to start standby PostgreSQL: %w", err)
+	// Wait for standby multipooler to register in topology
+	// This is needed so the restore API can find it
+	standbyPoolerID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "test-cell",
+		Name:      "standby-multipooler",
 	}
+	require.Eventually(t, func() bool {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		_, err := ts.GetMultiPooler(ctx, standbyPoolerID)
+		return err == nil
+	}, 10*time.Second, 100*time.Millisecond, "Standby multipooler should register in topology")
+	t.Logf("Standby multipooler registered in topology")
 
-	// Create symmetric pgbackrest configuration for standby
+	// Create symmetric pgbackrest configuration for standby BEFORE restore
+	// The restore operation needs this config file to exist
 	// Note: Standby shares the same backup repository and stanza as primary
 	// since they're replicas. Both clusters use the same stanza name.
 	//
@@ -637,16 +649,22 @@ func initializeStandby(t *testing.T, baseDir string, primaryPgctld *ProcessInsta
 	}
 	t.Logf("Created symmetric pgbackrest config at %s (pg1=self, pg2=primary, stanza: %s)", configPath, stanzaName)
 
+	// Configure standby as a replica using backup/restore
+	t.Logf("Configuring standby as replica of primary...")
+	setupStandbyReplication(t, primaryPgctld, standbyPgctld, ts)
+
+	// Start standby PostgreSQL (now configured as replica)
+	standbyGrpcAddr := fmt.Sprintf("localhost:%d", standbyPgctld.GrpcPort)
+	if err := endtoend.StartPostgreSQL(t, standbyGrpcAddr); err != nil {
+		return fmt.Errorf("failed to start standby PostgreSQL: %w", err)
+	}
+
 	// Note: We don't create a new stanza for the standby because:
 	// 1. It's in recovery mode, so pgbackrest won't allow stanza creation
 	// 2. It shares the primary's stanza since they're replicas
 	// 3. The stanza was already created when initializing the primary
 
-	// Start standby multipooler
-	if err := standbyMultipooler.Start(t); err != nil {
-		return fmt.Errorf("failed to start standby multipooler: %w", err)
-	}
-
+	// Note: Standby multipooler was already started earlier (before backup/restore)
 	// Wait for manager to be ready
 	waitForManagerReady(t, nil, standbyMultipooler)
 
@@ -812,7 +830,7 @@ func getSharedTestSetup(t *testing.T) *MultipoolerTestSetup {
 		}
 
 		// Initialize standby (pgctld, PostgreSQL with replication, consensus term, multipooler, type)
-		if err := initializeStandby(t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName); err != nil {
+		if err := initializeStandby(t, tempDir, primaryPgctld, standbyPgctld, standbyMultipooler, stanzaName, ts); err != nil {
 			setupError = err
 			return
 		}
@@ -915,44 +933,99 @@ func waitForManagerReady(t *testing.T, setup *MultipoolerTestSetup, manager *Pro
 
 // setupStandbyReplication configures the standby to replicate from the primary
 // Assumes standby data dir is initialized but PostgreSQL is not started yet
-func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance) {
+func setupStandbyReplication(t *testing.T, primaryPgctld *ProcessInstance, standbyPgctld *ProcessInstance, ts topo.Store) {
 	t.Helper()
 
-	// Backup standby's original configuration before pg_basebackup overwrites it
 	standbyPgDataDir := filepath.Join(standbyPgctld.DataDir, "pg_data")
-	configBackupDir := filepath.Join(standbyPgctld.DataDir, "config_backup")
 
-	t.Logf("Backing up standby configuration to: %s", configBackupDir)
-	err := os.MkdirAll(configBackupDir, 0o755)
-	require.NoError(t, err)
+	// Create MultiAdmin server connected to topology
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	adminServer := adminserver.NewMultiAdminServer(ts, logger)
 
-	// Remove the standby pg_data directory to prepare for pg_basebackup
-	t.Logf("Removing standby pg_data directory: %s", standbyPgDataDir)
-	err = os.RemoveAll(standbyPgDataDir)
-	require.NoError(t, err)
-
-	// Create base backup from primary using pg_basebackup
-	// Note: pg_basebackup needs to write to the pg_data subdirectory, not the pooler-dir
-	// We do NOT use -R flag because we want to test SetPrimaryConnInfo RPC method later
-	t.Logf("Creating base backup from primary (port %d) to standby pg_data dir...", primaryPgctld.PgPort)
-	basebackupCmd := exec.Command("pg_basebackup",
-		"-h", "localhost",
-		"-p", strconv.Itoa(primaryPgctld.PgPort),
-		"-U", "postgres",
-		"-D", standbyPgDataDir,
-		"-X", "stream",
-		"-c", "fast")
-
-	basebackupCmd.Env = append(os.Environ(), "PGPASSWORD=postgres")
-	output, err := basebackupCmd.CombinedOutput()
-	if err != nil {
-		t.Logf("pg_basebackup output: %s", string(output))
+	// Step 1: Create backup from primary using MultiAdmin API
+	t.Logf("Creating backup from primary using MultiAdmin API...")
+	backupReq := &multiadminpb.BackupRequest{
+		Database:     "postgres",
+		TableGroup:   "test",
+		Shard:        "", // Empty shard - multipooler doesn't specify a shard parameter
+		Type:         "full",
+		ForcePrimary: true, // Required for initial backup before standby exists
 	}
-	require.NoError(t, err, "pg_basebackup should succeed")
 
-	t.Logf("Base backup completed successfully")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	backupResp, err := adminServer.Backup(ctx, backupReq)
+	cancel()
+	require.NoError(t, err, "Backup should succeed")
+	require.NotEmpty(t, backupResp.JobId)
 
-	// Create standby.signal to put the server in recovery mode
+	t.Logf("Backup job created: %s", backupResp.JobId)
+
+	// Poll for backup completion
+	var backupID string
+	require.Eventually(t, func() bool {
+		statusReq := &multiadminpb.GetBackupJobStatusRequest{
+			JobId: backupResp.JobId,
+		}
+		statusResp, err := adminServer.GetBackupJobStatus(context.Background(), statusReq)
+		if err != nil {
+			t.Logf("Error checking backup status: %v", err)
+			return false
+		}
+		if statusResp.Status == multiadminpb.GetBackupJobStatusResponse_FAILED {
+			t.Fatalf("Backup job failed: %s", statusResp.ErrorMessage)
+		}
+		if statusResp.Status == multiadminpb.GetBackupJobStatusResponse_COMPLETED {
+			backupID = statusResp.BackupId
+			return true
+		}
+		return false
+	}, 120*time.Second, 2*time.Second, "Backup should complete within 120 seconds")
+
+	t.Logf("Backup completed successfully: %s", backupID)
+
+	// Step 2: Restore backup to standby using MultiAdmin API
+	// Note: pg_data directory doesn't exist yet - restore will create it
+	t.Logf("Restoring backup %s to standby using MultiAdmin API...", backupID)
+	restoreReq := &multiadminpb.RestoreFromBackupRequest{
+		Database:   "postgres",
+		TableGroup: "test",
+		Shard:      "", // Empty shard - multipooler doesn't specify a shard parameter
+		BackupId:   backupID,
+		PoolerId: &clustermetadatapb.ID{
+			Component: clustermetadatapb.ID_MULTIPOOLER,
+			Cell:      "test-cell",
+			Name:      "standby-multipooler",
+		},
+		AsStandby: true, // Restore as standby for replication setup
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+	restoreResp, err := adminServer.RestoreFromBackup(ctx, restoreReq)
+	cancel()
+	require.NoError(t, err, "RestoreFromBackup should succeed")
+	require.NotEmpty(t, restoreResp.JobId)
+
+	t.Logf("Restore job created: %s", restoreResp.JobId)
+
+	// Poll for restore completion
+	require.Eventually(t, func() bool {
+		statusReq := &multiadminpb.GetBackupJobStatusRequest{
+			JobId: restoreResp.JobId,
+		}
+		statusResp, err := adminServer.GetBackupJobStatus(context.Background(), statusReq)
+		if err != nil {
+			t.Logf("Error checking restore status: %v", err)
+			return false
+		}
+		if statusResp.Status == multiadminpb.GetBackupJobStatusResponse_FAILED {
+			t.Fatalf("Restore job failed: %s", statusResp.ErrorMessage)
+		}
+		return statusResp.Status == multiadminpb.GetBackupJobStatusResponse_COMPLETED
+	}, 120*time.Second, 2*time.Second, "Restore should complete within 120 seconds")
+
+	t.Logf("Restore completed successfully")
+
+	// Step 4: Create standby.signal to put the server in recovery mode
 	standbySignalPath := filepath.Join(standbyPgDataDir, "standby.signal")
 	t.Logf("Creating standby.signal file: %s", standbySignalPath)
 	err = os.WriteFile(standbySignalPath, []byte(""), 0o644)

@@ -3177,7 +3177,11 @@ type RestoreFromBackupRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Backup to restore from. If this is empty, we restore from the latest
 	// backup.
-	BackupId      string `protobuf:"bytes,1,opt,name=backup_id,json=backupId,proto3" json:"backup_id,omitempty"`
+	BackupId string `protobuf:"bytes,1,opt,name=backup_id,json=backupId,proto3" json:"backup_id,omitempty"`
+	// as_standby indicates whether to restore as a standby (replica) or primary.
+	// This is only needed when restoring to an uninitialized database.
+	// For already-initialized databases, the current recovery state is preserved.
+	AsStandby     bool `protobuf:"varint,2,opt,name=as_standby,json=asStandby,proto3" json:"as_standby,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3217,6 +3221,13 @@ func (x *RestoreFromBackupRequest) GetBackupId() string {
 		return x.BackupId
 	}
 	return ""
+}
+
+func (x *RestoreFromBackupRequest) GetAsStandby() bool {
+	if x != nil {
+		return x.AsStandby
+	}
+	return false
 }
 
 // RestoreFromBackupResponse contains the result of a restore operation
@@ -3590,9 +3601,11 @@ const file_multipoolermanagerdata_proto_rawDesc = "" +
 	"\rforce_primary\x18\x01 \x01(\bR\fforcePrimary\x12\x12\n" +
 	"\x04type\x18\x02 \x01(\tR\x04type\"-\n" +
 	"\x0eBackupResponse\x12\x1b\n" +
-	"\tbackup_id\x18\x01 \x01(\tR\bbackupId\"7\n" +
+	"\tbackup_id\x18\x01 \x01(\tR\bbackupId\"V\n" +
 	"\x18RestoreFromBackupRequest\x12\x1b\n" +
-	"\tbackup_id\x18\x01 \x01(\tR\bbackupId\"\x1b\n" +
+	"\tbackup_id\x18\x01 \x01(\tR\bbackupId\x12\x1d\n" +
+	"\n" +
+	"as_standby\x18\x02 \x01(\bR\tasStandby\"\x1b\n" +
 	"\x19RestoreFromBackupResponse\")\n" +
 	"\x11GetBackupsRequest\x12\x14\n" +
 	"\x05limit\x18\x01 \x01(\rR\x05limit\"V\n" +

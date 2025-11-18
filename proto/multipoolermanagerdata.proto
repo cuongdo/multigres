@@ -587,6 +587,11 @@ message RestoreFromBackupRequest {
   // Backup to restore from. If this is empty, we restore from the latest
   // backup.
   string backup_id = 1;
+
+  // as_standby indicates whether to restore as a standby (replica) or primary.
+  // This is only needed when restoring to an uninitialized database.
+  // For already-initialized databases, the current recovery state is preserved.
+  bool as_standby = 2;
 }
 
 // RestoreFromBackupResponse contains the result of a restore operation

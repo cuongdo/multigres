@@ -978,7 +978,11 @@ type RestoreFromBackupRequest struct {
 	// pooler_id identifies which multipooler to restore to (required).
 	// This is needed because a cell can have multiple poolers for the same
 	// database/table_group/shard combination.
-	PoolerId      *clustermetadata.ID `protobuf:"bytes,5,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
+	PoolerId *clustermetadata.ID `protobuf:"bytes,5,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
+	// as_standby indicates whether to restore as a standby (replica) or primary.
+	// This is only needed when restoring to an uninitialized database.
+	// If the database is already initialized, its current role is preserved.
+	AsStandby     bool `protobuf:"varint,6,opt,name=as_standby,json=asStandby,proto3" json:"as_standby,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1046,6 +1050,13 @@ func (x *RestoreFromBackupRequest) GetPoolerId() *clustermetadata.ID {
 		return x.PoolerId
 	}
 	return nil
+}
+
+func (x *RestoreFromBackupRequest) GetAsStandby() bool {
+	if x != nil {
+		return x.AsStandby
+	}
+	return false
 }
 
 // RestoreFromBackupResponse contains the job ID for tracking the async restore
@@ -1545,14 +1556,16 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\x04type\x18\x04 \x01(\tR\x04type\x12#\n" +
 	"\rforce_primary\x18\x05 \x01(\bR\fforcePrimary\"'\n" +
 	"\x0eBackupResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\xbc\x01\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\xdb\x01\n" +
 	"\x18RestoreFromBackupRequest\x12\x1a\n" +
 	"\bdatabase\x18\x01 \x01(\tR\bdatabase\x12\x1f\n" +
 	"\vtable_group\x18\x02 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
 	"\x05shard\x18\x03 \x01(\tR\x05shard\x12\x1b\n" +
 	"\tbackup_id\x18\x04 \x01(\tR\bbackupId\x120\n" +
-	"\tpooler_id\x18\x05 \x01(\v2\x13.clustermetadata.IDR\bpoolerId\"2\n" +
+	"\tpooler_id\x18\x05 \x01(\v2\x13.clustermetadata.IDR\bpoolerId\x12\x1d\n" +
+	"\n" +
+	"as_standby\x18\x06 \x01(\bR\tasStandby\"2\n" +
 	"\x19RestoreFromBackupResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"2\n" +
 	"\x19GetBackupJobStatusRequest\x12\x15\n" +

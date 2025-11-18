@@ -175,6 +175,10 @@ message RestoreFromBackupRequest {
   // This is needed because a cell can have multiple poolers for the same
   // database/table_group/shard combination.
   clustermetadata.ID pooler_id = 5;
+  // as_standby indicates whether to restore as a standby (replica) or primary.
+  // This is only needed when restoring to an uninitialized database.
+  // If the database is already initialized, its current role is preserved.
+  bool as_standby = 6;
 }
 
 // RestoreFromBackupResponse contains the job ID for tracking the async restore

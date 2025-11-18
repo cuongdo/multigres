@@ -43,9 +43,7 @@ func (s *MultiAdminServer) Backup(ctx context.Context, req *multiadminpb.BackupR
 	if req.TableGroup == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_group cannot be empty")
 	}
-	if req.Shard == "" {
-		return nil, status.Error(codes.InvalidArgument, "shard cannot be empty")
-	}
+	// Shard is optional - empty string is allowed for non-sharded deployments
 
 	// Create job
 	jobID := s.jobTracker.CreateJob(multiadminpb.GetBackupJobStatusResponse_BACKUP, req.Database, req.TableGroup, req.Shard)
@@ -114,9 +112,7 @@ func (s *MultiAdminServer) RestoreFromBackup(ctx context.Context, req *multiadmi
 	if req.TableGroup == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_group cannot be empty")
 	}
-	if req.Shard == "" {
-		return nil, status.Error(codes.InvalidArgument, "shard cannot be empty")
-	}
+	// Shard is optional - empty string is allowed for non-sharded deployments
 	if req.PoolerId == nil {
 		return nil, status.Error(codes.InvalidArgument, "pooler_id cannot be empty")
 	}
@@ -151,7 +147,8 @@ func (s *MultiAdminServer) executeRestore(ctx context.Context, jobID string, req
 
 	// Call restore on the pooler
 	restoreReq := &multipoolermanagerdata.RestoreFromBackupRequest{
-		BackupId: req.BackupId,
+		BackupId:  req.BackupId,
+		AsStandby: req.AsStandby,
 	}
 
 	_, err = client.RestoreFromBackup(ctx, restoreReq)
@@ -207,9 +204,7 @@ func (s *MultiAdminServer) GetBackups(ctx context.Context, req *multiadminpb.Get
 	if req.TableGroup == "" {
 		return nil, status.Error(codes.InvalidArgument, "table_group cannot be empty")
 	}
-	if req.Shard == "" {
-		return nil, status.Error(codes.InvalidArgument, "shard cannot be empty")
-	}
+	// Shard is optional - empty string is allowed for non-sharded deployments
 
 	// Get all cells from topology
 	cells, err := s.ts.GetCellNames(ctx)
@@ -228,11 +223,12 @@ func (s *MultiAdminServer) GetBackups(ctx context.Context, req *multiadminpb.Get
 		}
 
 		// Find poolers in this cell matching the criteria
+		// Note: Shard can be empty for non-sharded deployments
 		opt := &topo.GetMultiPoolersByCellOptions{
 			DatabaseShard: &topo.DatabaseShard{
 				Database:   req.Database,
 				TableGroup: req.TableGroup,
-				Shard:      req.Shard,
+				Shard:      req.Shard, // Empty shard matches all shards
 			},
 		}
 
