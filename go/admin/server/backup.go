@@ -52,8 +52,24 @@ func (s *MultiAdminServer) RestoreFromBackup(ctx context.Context, req *multiadmi
 func (s *MultiAdminServer) GetBackupJobStatus(ctx context.Context, req *multiadminpb.GetBackupJobStatusRequest) (*multiadminpb.GetBackupJobStatusResponse, error) {
 	s.logger.DebugContext(ctx, "GetBackupJobStatus request received", "job_id", req.JobId)
 
-	// TODO: Implement job status lookup
-	return nil, status.Error(codes.Unimplemented, "GetBackupJobStatus operation is not yet implemented")
+	// Validate request
+	if req.JobId == "" {
+		return nil, status.Error(codes.InvalidArgument, "job_id cannot be empty")
+	}
+
+	// Get job status from tracker
+	jobStatus, err := s.jobTracker.GetJobStatus(req.JobId)
+	if err != nil {
+		s.logger.DebugContext(ctx, "Job not found", "job_id", req.JobId, "error", err)
+		return nil, status.Errorf(codes.NotFound, "job not found: %s", req.JobId)
+	}
+
+	s.logger.DebugContext(ctx, "GetBackupJobStatus completed",
+		"job_id", req.JobId,
+		"status", jobStatus.Status,
+		"job_type", jobStatus.JobType)
+
+	return jobStatus, nil
 }
 
 // GetBackups lists backup artifacts with optional filtering
