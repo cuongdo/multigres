@@ -41,13 +41,18 @@ type MultiAdminServer struct {
 
 	// logger for structured logging
 	logger *slog.Logger
+
+	// jobTracker manages async backup/restore jobs. There is no attempt at
+	// persistence across restarts of MultiAdmin.
+	jobTracker *JobTracker
 }
 
 // NewMultiAdminServer creates a new MultiAdminServer instance
 func NewMultiAdminServer(ts topo.Store, logger *slog.Logger) *MultiAdminServer {
 	return &MultiAdminServer{
-		ts:     ts,
-		logger: logger,
+		ts:         ts,
+		logger:     logger,
+		jobTracker: NewJobTracker(),
 	}
 }
 

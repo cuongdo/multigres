@@ -214,22 +214,22 @@ message GetBackupJobStatusResponse {
   // For backup: created backup_id
   // For restore: backup_id that was restored
   string backup_id = 11;
-}
 
-// JobType indicates the type of async job
-enum JobType {
-  JOB_TYPE_UNKNOWN = 0;
-  JOB_TYPE_BACKUP = 1;
-  JOB_TYPE_RESTORE = 2;
-}
+  // JobStatus indicates the current state of an async job
+  enum JobStatus {
+    UNKNOWN = 0;
+    PENDING = 1;
+    RUNNING = 2;
+    COMPLETED = 3;
+    FAILED = 4;
+  }
 
-// JobStatus indicates the current state of an async job
-enum JobStatus {
-  JOB_STATUS_UNKNOWN = 0;
-  JOB_STATUS_PENDING = 1;
-  JOB_STATUS_RUNNING = 2;
-  JOB_STATUS_COMPLETED = 3;
-  JOB_STATUS_FAILED = 4;
+  // JobType indicates the type of async job
+  enum JobType {
+    UNSPECIFIED = 0;
+    BACKUP = 1;
+    RESTORE = 2;
+  }
 }
 
 // GetBackups operation messages
@@ -270,12 +270,12 @@ message BackupInfo {
   google.protobuf.Timestamp backup_time = 7;
   // backup_size_bytes is the size of the backup in bytes
   uint64 backup_size_bytes = 8;
-}
 
-// BackupStatus indicates the state of a backup artifact
-enum BackupStatus {
-  BACKUP_STATUS_UNKNOWN = 0;
-  BACKUP_STATUS_INCOMPLETE = 1;
-  BACKUP_STATUS_COMPLETE = 2;
-  BACKUP_STATUS_FAILED = 3;
+  // BackupStatus indicates the state of a backup artifact
+  enum BackupStatus {
+    UNKNOWN = 0;
+    INCOMPLETE = 1;
+    COMPLETE = 2;
+    FAILED = 3;
+  }
 }
