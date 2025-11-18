@@ -974,7 +974,11 @@ type RestoreFromBackupRequest struct {
 	// shard name (required)
 	Shard string `protobuf:"bytes,3,opt,name=shard,proto3" json:"shard,omitempty"`
 	// backup_id to restore from (optional, empty means "latest backup")
-	BackupId      string `protobuf:"bytes,4,opt,name=backup_id,json=backupId,proto3" json:"backup_id,omitempty"`
+	BackupId string `protobuf:"bytes,4,opt,name=backup_id,json=backupId,proto3" json:"backup_id,omitempty"`
+	// pooler_id identifies which multipooler to restore to (required).
+	// This is needed because a cell can have multiple poolers for the same
+	// database/table_group/shard combination.
+	PoolerId      *clustermetadata.ID `protobuf:"bytes,5,opt,name=pooler_id,json=poolerId,proto3" json:"pooler_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1035,6 +1039,13 @@ func (x *RestoreFromBackupRequest) GetBackupId() string {
 		return x.BackupId
 	}
 	return ""
+}
+
+func (x *RestoreFromBackupRequest) GetPoolerId() *clustermetadata.ID {
+	if x != nil {
+		return x.PoolerId
+	}
+	return nil
 }
 
 // RestoreFromBackupResponse contains the job ID for tracking the async restore
@@ -1534,13 +1545,14 @@ const file_multiadminservice_proto_rawDesc = "" +
 	"\x04type\x18\x04 \x01(\tR\x04type\x12#\n" +
 	"\rforce_primary\x18\x05 \x01(\bR\fforcePrimary\"'\n" +
 	"\x0eBackupResponse\x12\x15\n" +
-	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\x8a\x01\n" +
+	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"\xbc\x01\n" +
 	"\x18RestoreFromBackupRequest\x12\x1a\n" +
 	"\bdatabase\x18\x01 \x01(\tR\bdatabase\x12\x1f\n" +
 	"\vtable_group\x18\x02 \x01(\tR\n" +
 	"tableGroup\x12\x14\n" +
 	"\x05shard\x18\x03 \x01(\tR\x05shard\x12\x1b\n" +
-	"\tbackup_id\x18\x04 \x01(\tR\bbackupId\"2\n" +
+	"\tbackup_id\x18\x04 \x01(\tR\bbackupId\x120\n" +
+	"\tpooler_id\x18\x05 \x01(\v2\x13.clustermetadata.IDR\bpoolerId\"2\n" +
 	"\x19RestoreFromBackupResponse\x12\x15\n" +
 	"\x06job_id\x18\x01 \x01(\tR\x05jobId\"2\n" +
 	"\x19GetBackupJobStatusRequest\x12\x15\n" +
@@ -1660,7 +1672,8 @@ var file_multiadminservice_proto_goTypes = []any{
 	(*clustermetadata.MultiGateway)(nil),      // 28: clustermetadata.MultiGateway
 	(*clustermetadata.MultiPooler)(nil),       // 29: clustermetadata.MultiPooler
 	(*clustermetadata.MultiOrch)(nil),         // 30: clustermetadata.MultiOrch
-	(*timestamppb.Timestamp)(nil),             // 31: google.protobuf.Timestamp
+	(*clustermetadata.ID)(nil),                // 31: clustermetadata.ID
+	(*timestamppb.Timestamp)(nil),             // 32: google.protobuf.Timestamp
 }
 var file_multiadminservice_proto_depIdxs = []int32{
 	26, // 0: multiadmin.GetCellResponse.cell:type_name -> clustermetadata.Cell
@@ -1668,38 +1681,39 @@ var file_multiadminservice_proto_depIdxs = []int32{
 	28, // 2: multiadmin.GetGatewaysResponse.gateways:type_name -> clustermetadata.MultiGateway
 	29, // 3: multiadmin.GetPoolersResponse.poolers:type_name -> clustermetadata.MultiPooler
 	30, // 4: multiadmin.GetOrchsResponse.orchs:type_name -> clustermetadata.MultiOrch
-	1,  // 5: multiadmin.GetBackupJobStatusResponse.job_type:type_name -> multiadmin.GetBackupJobStatusResponse.JobType
-	0,  // 6: multiadmin.GetBackupJobStatusResponse.status:type_name -> multiadmin.GetBackupJobStatusResponse.JobStatus
-	25, // 7: multiadmin.GetBackupsResponse.backups:type_name -> multiadmin.BackupInfo
-	2,  // 8: multiadmin.BackupInfo.status:type_name -> multiadmin.BackupInfo.BackupStatus
-	31, // 9: multiadmin.BackupInfo.backup_time:type_name -> google.protobuf.Timestamp
-	3,  // 10: multiadmin.MultiAdminService.GetCell:input_type -> multiadmin.GetCellRequest
-	5,  // 11: multiadmin.MultiAdminService.GetDatabase:input_type -> multiadmin.GetDatabaseRequest
-	7,  // 12: multiadmin.MultiAdminService.GetCellNames:input_type -> multiadmin.GetCellNamesRequest
-	9,  // 13: multiadmin.MultiAdminService.GetDatabaseNames:input_type -> multiadmin.GetDatabaseNamesRequest
-	11, // 14: multiadmin.MultiAdminService.GetGateways:input_type -> multiadmin.GetGatewaysRequest
-	13, // 15: multiadmin.MultiAdminService.GetPoolers:input_type -> multiadmin.GetPoolersRequest
-	15, // 16: multiadmin.MultiAdminService.GetOrchs:input_type -> multiadmin.GetOrchsRequest
-	17, // 17: multiadmin.MultiAdminService.Backup:input_type -> multiadmin.BackupRequest
-	19, // 18: multiadmin.MultiAdminService.RestoreFromBackup:input_type -> multiadmin.RestoreFromBackupRequest
-	21, // 19: multiadmin.MultiAdminService.GetBackupJobStatus:input_type -> multiadmin.GetBackupJobStatusRequest
-	23, // 20: multiadmin.MultiAdminService.GetBackups:input_type -> multiadmin.GetBackupsRequest
-	4,  // 21: multiadmin.MultiAdminService.GetCell:output_type -> multiadmin.GetCellResponse
-	6,  // 22: multiadmin.MultiAdminService.GetDatabase:output_type -> multiadmin.GetDatabaseResponse
-	8,  // 23: multiadmin.MultiAdminService.GetCellNames:output_type -> multiadmin.GetCellNamesResponse
-	10, // 24: multiadmin.MultiAdminService.GetDatabaseNames:output_type -> multiadmin.GetDatabaseNamesResponse
-	12, // 25: multiadmin.MultiAdminService.GetGateways:output_type -> multiadmin.GetGatewaysResponse
-	14, // 26: multiadmin.MultiAdminService.GetPoolers:output_type -> multiadmin.GetPoolersResponse
-	16, // 27: multiadmin.MultiAdminService.GetOrchs:output_type -> multiadmin.GetOrchsResponse
-	18, // 28: multiadmin.MultiAdminService.Backup:output_type -> multiadmin.BackupResponse
-	20, // 29: multiadmin.MultiAdminService.RestoreFromBackup:output_type -> multiadmin.RestoreFromBackupResponse
-	22, // 30: multiadmin.MultiAdminService.GetBackupJobStatus:output_type -> multiadmin.GetBackupJobStatusResponse
-	24, // 31: multiadmin.MultiAdminService.GetBackups:output_type -> multiadmin.GetBackupsResponse
-	21, // [21:32] is the sub-list for method output_type
-	10, // [10:21] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	31, // 5: multiadmin.RestoreFromBackupRequest.pooler_id:type_name -> clustermetadata.ID
+	1,  // 6: multiadmin.GetBackupJobStatusResponse.job_type:type_name -> multiadmin.GetBackupJobStatusResponse.JobType
+	0,  // 7: multiadmin.GetBackupJobStatusResponse.status:type_name -> multiadmin.GetBackupJobStatusResponse.JobStatus
+	25, // 8: multiadmin.GetBackupsResponse.backups:type_name -> multiadmin.BackupInfo
+	2,  // 9: multiadmin.BackupInfo.status:type_name -> multiadmin.BackupInfo.BackupStatus
+	32, // 10: multiadmin.BackupInfo.backup_time:type_name -> google.protobuf.Timestamp
+	3,  // 11: multiadmin.MultiAdminService.GetCell:input_type -> multiadmin.GetCellRequest
+	5,  // 12: multiadmin.MultiAdminService.GetDatabase:input_type -> multiadmin.GetDatabaseRequest
+	7,  // 13: multiadmin.MultiAdminService.GetCellNames:input_type -> multiadmin.GetCellNamesRequest
+	9,  // 14: multiadmin.MultiAdminService.GetDatabaseNames:input_type -> multiadmin.GetDatabaseNamesRequest
+	11, // 15: multiadmin.MultiAdminService.GetGateways:input_type -> multiadmin.GetGatewaysRequest
+	13, // 16: multiadmin.MultiAdminService.GetPoolers:input_type -> multiadmin.GetPoolersRequest
+	15, // 17: multiadmin.MultiAdminService.GetOrchs:input_type -> multiadmin.GetOrchsRequest
+	17, // 18: multiadmin.MultiAdminService.Backup:input_type -> multiadmin.BackupRequest
+	19, // 19: multiadmin.MultiAdminService.RestoreFromBackup:input_type -> multiadmin.RestoreFromBackupRequest
+	21, // 20: multiadmin.MultiAdminService.GetBackupJobStatus:input_type -> multiadmin.GetBackupJobStatusRequest
+	23, // 21: multiadmin.MultiAdminService.GetBackups:input_type -> multiadmin.GetBackupsRequest
+	4,  // 22: multiadmin.MultiAdminService.GetCell:output_type -> multiadmin.GetCellResponse
+	6,  // 23: multiadmin.MultiAdminService.GetDatabase:output_type -> multiadmin.GetDatabaseResponse
+	8,  // 24: multiadmin.MultiAdminService.GetCellNames:output_type -> multiadmin.GetCellNamesResponse
+	10, // 25: multiadmin.MultiAdminService.GetDatabaseNames:output_type -> multiadmin.GetDatabaseNamesResponse
+	12, // 26: multiadmin.MultiAdminService.GetGateways:output_type -> multiadmin.GetGatewaysResponse
+	14, // 27: multiadmin.MultiAdminService.GetPoolers:output_type -> multiadmin.GetPoolersResponse
+	16, // 28: multiadmin.MultiAdminService.GetOrchs:output_type -> multiadmin.GetOrchsResponse
+	18, // 29: multiadmin.MultiAdminService.Backup:output_type -> multiadmin.BackupResponse
+	20, // 30: multiadmin.MultiAdminService.RestoreFromBackup:output_type -> multiadmin.RestoreFromBackupResponse
+	22, // 31: multiadmin.MultiAdminService.GetBackupJobStatus:output_type -> multiadmin.GetBackupJobStatusResponse
+	24, // 32: multiadmin.MultiAdminService.GetBackups:output_type -> multiadmin.GetBackupsResponse
+	22, // [22:33] is the sub-list for method output_type
+	11, // [11:22] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_multiadminservice_proto_init() }

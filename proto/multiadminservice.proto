@@ -171,6 +171,10 @@ message RestoreFromBackupRequest {
   string shard = 3;
   // backup_id to restore from (optional, empty means "latest backup")
   string backup_id = 4;
+  // pooler_id identifies which multipooler to restore to (required).
+  // This is needed because a cell can have multiple poolers for the same
+  // database/table_group/shard combination.
+  clustermetadata.ID pooler_id = 5;
 }
 
 // RestoreFromBackupResponse contains the job ID for tracking the async restore
