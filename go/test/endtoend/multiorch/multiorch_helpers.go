@@ -168,6 +168,53 @@ func (env *testEnv) createNodes(count int) []*nodeInstance {
 	return nodes
 }
 
+// createNodesWithFaultInjection creates nodes where specified indices will have
+// a failing pgbackrest wrapper injected. This allows testing scenarios where
+// some standbys fail to initialize due to pgbackrest errors.
+//
+// failingIndices: slice of node indices (0-based) that should have fault injection
+// maxFailures: how many restore attempts should fail before succeeding
+func (env *testEnv) createNodesWithFaultInjection(count int, failingIndices []int, maxFailures int) []*nodeInstance {
+	env.t.Helper()
+
+	// Create set of failing indices for O(1) lookup
+	failingSet := make(map[int]bool)
+	for _, idx := range failingIndices {
+		failingSet[idx] = true
+	}
+
+	// Create wrapper script that will be used by failing nodes
+	wrapperDir := createFailingPgBackRestWrapper(env.t, env.tempDir, maxFailures)
+
+	nodes := make([]*nodeInstance, count)
+	for i := range count {
+		var node *nodeInstance
+
+		if failingSet[i] {
+			// This node gets the failing pgbackrest wrapper
+			// Prepend wrapper dir to PATH so it takes precedence
+			currentPath := os.Getenv("PATH")
+			modifiedPath := fmt.Sprintf("PATH=%s:%s", wrapperDir, currentPath)
+
+			node = createEmptyNodeWithEnv(env.t, env.tempDir, env.config.cellName,
+				env.config.shardID, env.config.database, i, env.etcdClientAddr,
+				env.config.stanzaName, []string{modifiedPath})
+			env.t.Logf("Node %d created with fault injection (max_failures=%d)", i, maxFailures)
+		} else {
+			// Normal node without fault injection
+			node = createEmptyNode(env.t, env.tempDir, env.config.cellName,
+				env.config.shardID, env.config.database, i, env.etcdClientAddr, env.config.stanzaName)
+		}
+
+		nodes[i] = node
+		env.t.Cleanup(func() { cleanupNode(env.t, node) })
+	}
+
+	env.nodes = nodes
+	env.t.Logf("Created %d nodes (%d with fault injection)", count, len(failingIndices))
+	return nodes
+}
+
 // setupPgBackRest sets up pgbackrest configuration for all nodes in the environment
 func (env *testEnv) setupPgBackRest() {
 	env.t.Helper()
@@ -279,6 +326,91 @@ func createEmptyNode(t *testing.T, baseDir, cell, shard, database string, index 
 	t.Logf("Started multipooler for %s (pid: %d, grpc: %d)", name, multipoolerCmd.Process.Pid, grpcPort)
 
 	// Wait for multipooler to be ready by polling its status
+	waitForMultipoolerReady(t, grpcPort, 30*time.Second)
+	t.Logf("Multipooler %s is ready", name)
+
+	return &nodeInstance{
+		name:           name,
+		cell:           cell,
+		grpcPort:       grpcPort,
+		pgPort:         pgPort,
+		pgctldGrpcPort: pgctldGrpcPort,
+		dataDir:        dataDir,
+		pgctldProcess:  pgctldCmd,
+		multipoolerCmd: multipoolerCmd,
+	}
+}
+
+// createEmptyNodeWithEnv creates a node like createEmptyNode but allows custom environment
+// variables to be passed to the multipooler process. This is useful for injecting
+// a modified PATH that includes a failing pgbackrest wrapper.
+func createEmptyNodeWithEnv(t *testing.T, baseDir, cell, shard, database string, index int, etcdAddr, pgBackRestStanza string, extraEnv []string) *nodeInstance {
+	t.Helper()
+
+	name := fmt.Sprintf("node%d", index)
+	dataDir := filepath.Join(baseDir, name)
+	require.NoError(t, os.MkdirAll(dataDir, 0o755))
+
+	// Allocate ports
+	pgctldGrpcPort := utils.GetFreePort(t)
+	pgPort := utils.GetFreePort(t)
+	grpcPort := utils.GetFreePort(t)
+
+	// Start pgctld server (no PATH override needed - pgctld doesn't use pgbackrest directly)
+	logFile := filepath.Join(dataDir, "pgctld.log")
+	pgctldCmd := exec.Command("pgctld", "server",
+		"--pooler-dir", dataDir,
+		"--grpc-port", fmt.Sprintf("%d", pgctldGrpcPort),
+		"--pg-port", fmt.Sprintf("%d", pgPort),
+		"--log-output", logFile)
+
+	pgctldCmd.Env = append(os.Environ(),
+		"MULTIGRES_TESTDATA_DIR="+baseDir,
+	)
+	if runtime.GOOS == "darwin" {
+		pgctldCmd.Env = append(pgctldCmd.Env, "LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
+	}
+
+	require.NoError(t, pgctldCmd.Start())
+	t.Logf("Started pgctld for %s (pid: %d, grpc: %d, pg: %d)", name, pgctldCmd.Process.Pid, pgctldGrpcPort, pgPort)
+
+	waitForProcessReady(t, "pgctld", pgctldGrpcPort, 10*time.Second)
+
+	// Start multipooler with custom environment
+	serviceID := fmt.Sprintf("%s/%s", cell, name)
+	multipoolerCmd := exec.Command("multipooler",
+		"--grpc-port", fmt.Sprintf("%d", grpcPort),
+		"--database", database,
+		"--table-group", constants.DefaultTableGroup,
+		"--shard", constants.DefaultShard,
+		"--pgctld-addr", fmt.Sprintf("localhost:%d", pgctldGrpcPort),
+		"--pooler-dir", dataDir,
+		"--pg-port", fmt.Sprintf("%d", pgPort),
+		"--service-map", "grpc-pooler,grpc-poolermanager,grpc-consensus,grpc-backup",
+		"--topo-global-server-addresses", etcdAddr,
+		"--topo-global-root", "/multigres/global",
+		"--topo-implementation", "etcd2",
+		"--cell", cell,
+		"--service-id", serviceID,
+		"--pgbackrest-stanza", pgBackRestStanza,
+	)
+	multipoolerCmd.Dir = dataDir
+
+	// Apply custom environment (includes modified PATH for fault injection)
+	multipoolerCmd.Env = append(os.Environ(), extraEnv...)
+	if runtime.GOOS == "darwin" {
+		multipoolerCmd.Env = append(multipoolerCmd.Env, "LC_ALL=en_US.UTF-8", "LANG=en_US.UTF-8")
+	}
+
+	mpLogFile := filepath.Join(dataDir, "multipooler.log")
+	mpLogF, err := os.Create(mpLogFile)
+	require.NoError(t, err)
+	multipoolerCmd.Stdout = mpLogF
+	multipoolerCmd.Stderr = mpLogF
+
+	require.NoError(t, multipoolerCmd.Start())
+	t.Logf("Started multipooler for %s with custom env (pid: %d, grpc: %d)", name, multipoolerCmd.Process.Pid, grpcPort)
+
 	waitForMultipoolerReady(t, grpcPort, 30*time.Second)
 	t.Logf("Multipooler %s is ready", name)
 
@@ -675,4 +807,69 @@ func waitForNewPrimaryElected(t *testing.T, nodes []*nodeInstance, oldPrimaryNam
 
 	t.Fatalf("Timeout: new primary not elected within %v", timeout)
 	return nil
+}
+
+// createFailingPgBackRestWrapper creates a wrapper script that fails pgbackrest restore
+// commands for the first N attempts, then succeeds. This simulates transient failures
+// like lock contention.
+//
+// The wrapper:
+// - Fails "restore" commands by returning exit code 1 with an error message
+// - Passes through all other commands (backup, info, stanza-create, etc.)
+// - Uses a counter file to track attempts and stop failing after maxFailures
+//
+// Returns the path to the wrapper script.
+func createFailingPgBackRestWrapper(t *testing.T, baseDir string, maxFailures int) string {
+	t.Helper()
+
+	wrapperDir := filepath.Join(baseDir, "bin")
+	require.NoError(t, os.MkdirAll(wrapperDir, 0o755))
+
+	counterFile := filepath.Join(baseDir, "pgbackrest_restore_attempts")
+	wrapperPath := filepath.Join(wrapperDir, "pgbackrest")
+
+	// Create wrapper script that intercepts restore commands
+	wrapperScript := fmt.Sprintf(`#!/bin/bash
+# Wrapper script that fails pgbackrest restore commands for testing
+
+COUNTER_FILE="%s"
+MAX_FAILURES=%d
+REAL_PGBACKREST=$(which pgbackrest)
+
+# Check if this is a restore command
+IS_RESTORE=false
+for arg in "$@"; do
+    if [[ "$arg" == "restore" ]]; then
+        IS_RESTORE=true
+        break
+    fi
+done
+
+if [[ "$IS_RESTORE" == "true" ]]; then
+    # Read current count (default to 0 if file doesn't exist)
+    COUNT=0
+    if [[ -f "$COUNTER_FILE" ]]; then
+        COUNT=$(cat "$COUNTER_FILE")
+    fi
+
+    # Increment counter
+    COUNT=$((COUNT + 1))
+    echo "$COUNT" > "$COUNTER_FILE"
+
+    # Fail if we haven't hit max failures yet
+    if [[ $COUNT -le $MAX_FAILURES ]]; then
+        echo "ERROR: [050]: unable to acquire lock on file '/tmp/pgbackrest/test-restore.lock': Resource temporarily unavailable" >&2
+        echo "HINT: is another pgbackrest process running?" >&2
+        exit 50
+    fi
+fi
+
+# Pass through to real pgbackrest
+exec "$REAL_PGBACKREST" "$@"
+`, counterFile, maxFailures)
+
+	require.NoError(t, os.WriteFile(wrapperPath, []byte(wrapperScript), 0o755))
+	t.Logf("Created failing pgbackrest wrapper at %s (max_failures=%d)", wrapperPath, maxFailures)
+
+	return wrapperDir
 }
