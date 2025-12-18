@@ -756,10 +756,16 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 
 	pm.logger.InfoContext(ctx, "Auto-restore: completed successfully", "backup_id", latestBackup.BackupId)
 
-	// After successful restore, configure primary_conninfo if we have pending info
-	// This info was stored by InitializeAsStandby before the restore
-	primaryHost, primaryPort := pm.getPendingPrimaryConnInfo()
-	if primaryHost != "" && primaryPort > 0 {
+	// After successful restore, configure primary_conninfo by looking up the shard's PRIMARY from topology
+	primary, err := pm.findShardPrimary(ctx)
+	if err != nil {
+		pm.logger.ErrorContext(ctx, "Failed to find shard primary from topology", "error", err)
+		return false, false // Retry
+	}
+
+	if primary != nil {
+		primaryHost := primary.Hostname
+		primaryPort := primary.PortMap["postgres"]
 		pm.logger.InfoContext(ctx, "Configuring primary connection info after restore",
 			"primary_host", primaryHost, "primary_port", primaryPort)
 
@@ -773,8 +779,6 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 			pm.logger.ErrorContext(ctx, "Failed to set primary_conninfo after restore", "error", err)
 			return false, false // Retry
 		}
-
-		pm.clearPendingPrimaryConnInfo()
 	}
 
 	return true, true

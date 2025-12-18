@@ -123,11 +123,6 @@ type MultiPoolerManager struct {
 	// Once true, stays true for the lifetime of the manager.
 	initialized bool
 
-	// pendingPrimaryHost and pendingPrimaryPort store the primary connection info
-	// set by InitializeAsStandby, to be used after restore completes.
-	pendingPrimaryHost string
-	pendingPrimaryPort int32
-
 	// TODO: Implement async query serving state management system
 	// This should include: target state, current state, convergence goroutine,
 	// and state-specific handlers (setServing, setServingReadOnly, setNotServing, setDrained)
@@ -452,6 +447,48 @@ func (pm *MultiPoolerManager) getPoolerType() clustermetadatapb.PoolerType {
 		return pm.cachedMultipooler.multipooler.Type
 	}
 	return clustermetadatapb.PoolerType_UNKNOWN
+}
+
+// findShardPrimary looks up the PRIMARY multipooler for this shard from topology.
+// Returns nil if no primary is found (which is valid during bootstrap).
+func (pm *MultiPoolerManager) findShardPrimary(ctx context.Context) (*clustermetadatapb.MultiPooler, error) {
+	// Get shard info from cached multipooler
+	pm.cachedMultipooler.mu.Lock()
+	mp := pm.cachedMultipooler.multipooler
+	pm.cachedMultipooler.mu.Unlock()
+
+	if mp == nil || mp.MultiPooler == nil {
+		return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "multipooler not loaded from topology")
+	}
+
+	database := mp.GetDatabase()
+	tablegroup := mp.GetTableGroup()
+	shard := mp.GetShard()
+
+	// Query topology for all multipoolers in this shard
+	poolers, err := pm.topoClient.GetMultiPoolersByCell(ctx, pm.serviceID.Cell, &topoclient.GetMultiPoolersByCellOptions{
+		DatabaseShard: &topoclient.DatabaseShard{
+			Database:   database,
+			TableGroup: tablegroup,
+			Shard:      shard,
+		},
+	})
+	if err != nil {
+		return nil, mterrors.Wrap(err, "failed to get multipoolers from topology")
+	}
+
+	// Find the PRIMARY (not ourselves)
+	for _, p := range poolers {
+		if p.GetType() == clustermetadatapb.PoolerType_PRIMARY && p.GetId().GetName() != pm.serviceID.Name {
+			return p.MultiPooler, nil
+		}
+	}
+
+	pm.logger.InfoContext(ctx, "No primary found in topology for shard",
+		"database", database,
+		"tablegroup", tablegroup,
+		"shard", shard)
+	return nil, nil
 }
 
 // getDatabase returns the database name from the multipooler record

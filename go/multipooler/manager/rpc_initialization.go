@@ -157,9 +157,9 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 // This function:
 // 1. Sets pooler type to REPLICA (enables auto-restore at startup)
 // 2. Sets consensus term
-// 3. Stores primary connection info for later use
 //
 // The pooler will NOT be marked as initialized - that happens after successful restore.
+// After restore, primary_conninfo is configured by looking up the shard's PRIMARY from topology.
 func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *multipoolermanagerdatapb.InitializeAsStandbyRequest) (*multipoolermanagerdatapb.InitializeAsStandbyResponse, error) {
 	pm.logger.InfoContext(ctx, "InitializeAsStandby called",
 		"shard", pm.getShardID(),
@@ -200,10 +200,6 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 		}
 	}
 
-	// Store primary connection info for use after restore
-	// This will be applied by tryAutoRestoreFromBackup after successful restore
-	pm.storePrimaryConnInfo(req.PrimaryHost, req.PrimaryPort)
-
 	pm.logger.InfoContext(ctx, "InitializeAsStandby completed - restore will happen at startup",
 		"shard", pm.getShardID(),
 		"term", req.ConsensusTerm)
@@ -214,29 +210,6 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 }
 
 // Helper methods
-
-// storePrimaryConnInfo stores the primary connection info for use after restore.
-func (pm *MultiPoolerManager) storePrimaryConnInfo(host string, port int32) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	pm.pendingPrimaryHost = host
-	pm.pendingPrimaryPort = port
-}
-
-// getPendingPrimaryConnInfo retrieves stored primary connection info.
-func (pm *MultiPoolerManager) getPendingPrimaryConnInfo() (host string, port int32) {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	return pm.pendingPrimaryHost, pm.pendingPrimaryPort
-}
-
-// clearPendingPrimaryConnInfo clears stored primary connection info after use.
-func (pm *MultiPoolerManager) clearPendingPrimaryConnInfo() {
-	pm.mu.Lock()
-	defer pm.mu.Unlock()
-	pm.pendingPrimaryHost = ""
-	pm.pendingPrimaryPort = 0
-}
 
 // multigresInitMarker is the filename for the initialization marker.
 // This file is created after full initialization completes (schema created, backup done).
