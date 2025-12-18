@@ -256,6 +256,82 @@ func TestInitializeAsStandby(t *testing.T) {
 	}
 }
 
+func TestInitializeAsStandby_SetsTypeWithoutRestore(t *testing.T) {
+	ctx := context.Background()
+	poolerDir := t.TempDir()
+
+	// Create test config
+	ts, _ := memorytopo.NewServerAndFactory(ctx, "test-cell")
+	defer ts.Close()
+	serviceID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "test-cell",
+		Name:      "test-pooler",
+	}
+
+	database := "postgres"
+
+	// Create database in topology (required for backup location)
+	err := ts.CreateDatabase(ctx, database, &clustermetadatapb.Database{
+		Name:             database,
+		BackupLocation:   "/var/backups/pgbackrest",
+		DurabilityPolicy: "ANY_2",
+	})
+	require.NoError(t, err)
+
+	// Create multipooler in topology (needed for changeTypeLocked to work)
+	multipooler := &clustermetadatapb.MultiPooler{
+		Id:         serviceID,
+		Database:   database,
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      constants.DefaultShard,
+		Type:       clustermetadatapb.PoolerType_UNKNOWN,
+	}
+	require.NoError(t, ts.CreateMultiPooler(ctx, multipooler))
+
+	config := &Config{
+		PoolerDir:  poolerDir,
+		PgPort:     5432,
+		Database:   database,
+		TopoClient: ts,
+		ServiceID:  serviceID,
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      constants.DefaultShard,
+	}
+
+	logger := slog.Default()
+	pm, err := NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+
+	// Note: Not initializing consensus state for this test - it requires pg_data directory
+	// The InitializeAsStandby function gracefully handles nil consensusState
+
+	// Load multipooler from topo (simulating what Start() does)
+	mp, err := ts.GetMultiPooler(ctx, serviceID)
+	require.NoError(t, err)
+	pm.mu.Lock()
+	pm.multipooler = mp
+	pm.updateCachedMultipooler()
+	pm.mu.Unlock()
+
+	req := &multipoolermanagerdatapb.InitializeAsStandbyRequest{
+		PrimaryHost:   "localhost",
+		PrimaryPort:   5432,
+		ConsensusTerm: 1,
+	}
+
+	resp, err := pm.InitializeAsStandby(ctx, req)
+	require.NoError(t, err)
+	assert.True(t, resp.Success)
+
+	// Type should be REPLICA
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, pm.getPoolerType())
+
+	// But NOT initialized (restore hasn't happened yet)
+	assert.False(t, pm.isInitialized(ctx),
+		"Should NOT be initialized - restore happens at startup via tryAutoRestoreFromBackup")
+}
+
 func TestHelperMethods(t *testing.T) {
 	t.Run("hasDataDirectory", func(t *testing.T) {
 		poolerDir := t.TempDir()

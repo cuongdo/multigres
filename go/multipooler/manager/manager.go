@@ -123,6 +123,11 @@ type MultiPoolerManager struct {
 	// Once true, stays true for the lifetime of the manager.
 	initialized bool
 
+	// pendingPrimaryHost and pendingPrimaryPort store the primary connection info
+	// set by InitializeAsStandby, to be used after restore completes.
+	pendingPrimaryHost string
+	pendingPrimaryPort int32
+
 	// TODO: Implement async query serving state management system
 	// This should include: target state, current state, convergence goroutine,
 	// and state-specific handlers (setServing, setServingReadOnly, setNotServing, setDrained)

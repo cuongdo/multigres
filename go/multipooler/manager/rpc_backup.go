@@ -702,21 +702,22 @@ func (pm *MultiPoolerManager) tryAutoRestoreFromBackup(ctx context.Context) {
 func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success bool, done bool) {
 	// Acquire action lock to prevent races with initialization RPCs.
 	// This ensures InitializeEmptyPrimary/InitializeAsStandby can't run concurrently.
-	lockCtx, err := pm.actionLock.Acquire(ctx, "tryAutoRestoreFromBackup")
+	var err error
+	ctx, err = pm.actionLock.Acquire(ctx, "tryAutoRestoreFromBackup")
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Auto-restore: failed to acquire action lock, will retry", "error", err)
 		return false, false
 	}
-	defer pm.actionLock.Release(lockCtx)
+	defer pm.actionLock.Release(ctx)
 
 	// Check if we were initialized while waiting (by an RPC)
-	if pm.isInitialized(lockCtx) {
+	if pm.isInitialized(ctx) {
 		pm.logger.InfoContext(ctx, "Auto-restore skipped: pooler was initialized while waiting")
 		return false, true
 	}
 
 	// Check for available backups
-	backups, err := pm.listBackups(lockCtx)
+	backups, err := pm.listBackups(ctx)
 	if err != nil {
 		pm.logger.ErrorContext(ctx, "Auto-restore: failed to check for backups, will retry", "error", err)
 		return false, false
@@ -746,7 +747,7 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 	// Perform the restore using restoreFromBackupLocked
 	// This ensures consistent behavior between auto-restore and explicit RestoreFromBackup RPC
 	pm.logger.InfoContext(ctx, "Executing auto-restore from backup", "backup_id", latestBackup.BackupId)
-	if err := pm.restoreFromBackupLocked(lockCtx, latestBackup.BackupId); err != nil {
+	if err := pm.restoreFromBackupLocked(ctx, latestBackup.BackupId); err != nil {
 		pm.logger.ErrorContext(ctx, "Auto-restore: restore failed, will retry",
 			"backup_id", latestBackup.BackupId,
 			"error", err)
@@ -754,5 +755,27 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 	}
 
 	pm.logger.InfoContext(ctx, "Auto-restore: completed successfully", "backup_id", latestBackup.BackupId)
+
+	// After successful restore, configure primary_conninfo if we have pending info
+	// This info was stored by InitializeAsStandby before the restore
+	primaryHost, primaryPort := pm.getPendingPrimaryConnInfo()
+	if primaryHost != "" && primaryPort > 0 {
+		pm.logger.InfoContext(ctx, "Configuring primary connection info after restore",
+			"primary_host", primaryHost, "primary_port", primaryPort)
+
+		// Wait for database connection first
+		if err := pm.waitForDatabaseConnection(ctx); err != nil {
+			pm.logger.ErrorContext(ctx, "Failed to connect to database after restore", "error", err)
+			return false, false // Retry
+		}
+
+		if err := pm.setPrimaryConnInfoLocked(ctx, primaryHost, primaryPort, false, true); err != nil {
+			pm.logger.ErrorContext(ctx, "Failed to set primary_conninfo after restore", "error", err)
+			return false, false // Retry
+		}
+
+		pm.clearPendingPrimaryConnInfo()
+	}
+
 	return true, true
 }

@@ -151,8 +151,15 @@ func (pm *MultiPoolerManager) InitializeEmptyPrimary(ctx context.Context, req *m
 	}, nil
 }
 
-// InitializeAsStandby initializes this pooler as a standby from a primary backup
-// Used during bootstrap initialization of a new shard or when adding a new standby
+// InitializeAsStandby marks this pooler as a standby and configures replication settings.
+// The actual restore from backup happens via tryAutoRestoreFromBackup at startup.
+//
+// This function:
+// 1. Sets pooler type to REPLICA (enables auto-restore at startup)
+// 2. Sets consensus term
+// 3. Stores primary connection info for later use
+//
+// The pooler will NOT be marked as initialized - that happens after successful restore.
 func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *multipoolermanagerdatapb.InitializeAsStandbyRequest) (*multipoolermanagerdatapb.InitializeAsStandbyResponse, error) {
 	pm.logger.InfoContext(ctx, "InitializeAsStandby called",
 		"shard", pm.getShardID(),
@@ -168,89 +175,68 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 	}
 	defer pm.actionLock.Release(ctx)
 
-	// 1. Check for existing data directory
+	// Check for existing data directory - if it exists and not force, fail
 	if pm.hasDataDirectory() {
 		if !req.Force {
-			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION, "data directory already exists, use force=true to reinitialize")
+			return nil, mterrors.New(mtrpcpb.Code_FAILED_PRECONDITION,
+				"data directory already exists, use force=true to reinitialize")
 		}
-		// Remove data directory if force
 		pm.logger.InfoContext(ctx, "Force reinit: removing data directory", "shard", pm.getShardID())
 		if err := pm.removeDataDirectory(); err != nil {
 			return nil, mterrors.Wrap(err, "failed to remove data directory")
 		}
 	}
 
-	// 2. Restore from the specified backup (or latest if not specified)
-	if req.BackupId != "" {
-		pm.logger.InfoContext(ctx, "Restoring from specified backup", "backup_id", req.BackupId, "primary", fmt.Sprintf("%s:%d", req.PrimaryHost, req.PrimaryPort))
-	} else {
-		pm.logger.InfoContext(ctx, "Restoring from latest backup on primary", "primary", fmt.Sprintf("%s:%d", req.PrimaryHost, req.PrimaryPort))
+	// Set pooler type to REPLICA - this enables tryAutoRestoreFromBackup at startup
+	pm.logger.InfoContext(ctx, "Setting pooler type to REPLICA", "shard", pm.getShardID())
+	if err := pm.changeTypeLocked(ctx, clustermetadatapb.PoolerType_REPLICA); err != nil {
+		return nil, mterrors.Wrap(err, "failed to set pooler type to REPLICA")
 	}
 
-	// Restore from backup (empty string means latest)
-	// restoreFromBackupLocked will check that this is a standby and start PostgreSQL in standby mode
-	err = pm.restoreFromBackupLocked(ctx, req.BackupId)
-	if err != nil {
-		return nil, mterrors.Wrap(err, "failed to restore from backup")
-	}
-
-	if req.BackupId != "" {
-		pm.logger.InfoContext(ctx, "Successfully restored from specified backup", "backup_id", req.BackupId)
-	} else {
-		pm.logger.InfoContext(ctx, "Successfully restored from latest backup")
-	}
-
-	// Note: RestoreFromBackup already restarted PostgreSQL as standby, so we skip
-	// the explicit restart here. The standby.signal is already in place.
-
-	// Extract final LSN from backup metadata
-	backups, err := pm.getBackupsLocked(ctx, 1) // Get latest backup
-	if err != nil {
-		pm.logger.WarnContext(ctx, "Failed to get backup metadata for LSN", "error", err)
-		// Non-fatal: we can continue without LSN
-	}
-
-	finalLSN := ""
-	if len(backups) > 0 && backups[0].FinalLsn != "" {
-		finalLSN = backups[0].FinalLsn
-		pm.logger.InfoContext(ctx, "Backup LSN captured", "backup_id", backups[0].BackupId, "final_lsn", finalLSN)
-	} else {
-		pm.logger.WarnContext(ctx, "No LSN available from backup metadata")
-	}
-
-	// 3. Wait for database connection
-	if err := pm.waitForDatabaseConnection(ctx); err != nil {
-		return nil, mterrors.Wrap(err, "failed to connect to database")
-	}
-
-	// 4. Configure primary_conninfo now that PostgreSQL is running
-	// Use the locked version since we're already holding the action lock
-	pm.logger.InfoContext(ctx, "Configuring primary connection info", "primary_host", req.PrimaryHost, "primary_port", req.PrimaryPort)
-	if err := pm.setPrimaryConnInfoLocked(ctx, req.PrimaryHost, req.PrimaryPort, false, true); err != nil {
-		return nil, mterrors.Wrap(err, "failed to set primary_conninfo")
-	}
-
-	// 5. Set consensus term
+	// Set consensus term
 	if pm.consensusState != nil {
 		if err := pm.consensusState.UpdateTermAndSave(ctx, req.ConsensusTerm); err != nil {
 			return nil, mterrors.Wrap(err, "failed to set consensus term")
 		}
 	}
 
-	// Mark as initialized after successful standby initialization.
-	// This sets the cached boolean and writes the marker file.
-	if err := pm.setInitialized(); err != nil {
-		return nil, mterrors.Wrap(err, "failed to mark pooler as initialized")
-	}
+	// Store primary connection info for use after restore
+	// This will be applied by tryAutoRestoreFromBackup after successful restore
+	pm.storePrimaryConnInfo(req.PrimaryHost, req.PrimaryPort)
 
-	pm.logger.InfoContext(ctx, "Successfully initialized pooler as standby", "shard", pm.getShardID(), "term", req.ConsensusTerm)
+	pm.logger.InfoContext(ctx, "InitializeAsStandby completed - restore will happen at startup",
+		"shard", pm.getShardID(),
+		"term", req.ConsensusTerm)
+
 	return &multipoolermanagerdatapb.InitializeAsStandbyResponse{
-		Success:  true,
-		FinalLsn: finalLSN,
+		Success: true,
 	}, nil
 }
 
 // Helper methods
+
+// storePrimaryConnInfo stores the primary connection info for use after restore.
+func (pm *MultiPoolerManager) storePrimaryConnInfo(host string, port int32) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.pendingPrimaryHost = host
+	pm.pendingPrimaryPort = port
+}
+
+// getPendingPrimaryConnInfo retrieves stored primary connection info.
+func (pm *MultiPoolerManager) getPendingPrimaryConnInfo() (host string, port int32) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.pendingPrimaryHost, pm.pendingPrimaryPort
+}
+
+// clearPendingPrimaryConnInfo clears stored primary connection info after use.
+func (pm *MultiPoolerManager) clearPendingPrimaryConnInfo() {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.pendingPrimaryHost = ""
+	pm.pendingPrimaryPort = 0
+}
 
 // multigresInitMarker is the filename for the initialization marker.
 // This file is created after full initialization completes (schema created, backup done).
