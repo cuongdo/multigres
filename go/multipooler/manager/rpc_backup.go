@@ -664,21 +664,24 @@ func (pm *MultiPoolerManager) tryAutoRestoreFromBackup(ctx context.Context) {
 		return
 	}
 
-	// Only auto-restore REPLICA poolers - PRIMARY must be explicitly initialized.
-	poolerType := pm.getPoolerType()
-	if poolerType != clustermetadatapb.PoolerType_REPLICA {
-		pm.logger.InfoContext(ctx, "Auto-restore skipped: only REPLICA poolers auto-restore", "pooler_type", poolerType.String())
-		return
-	}
-
 	pm.logger.InfoContext(ctx, "Auto-restore: pooler is uninitialized, checking for backups")
 
-	// Retry loop: keep trying until we succeed or context is cancelled
+	// Retry loop: keep trying until we succeed or context is cancelled.
+	// The pooler type check is inside the loop because InitializeAsStandby may
+	// set the type to REPLICA after the manager starts.
 	r := retry.New(pm.autoRestoreRetryInterval, pm.autoRestoreRetryInterval)
 	for attempt, err := range r.Attempts(ctx) {
 		if err != nil {
 			pm.logger.InfoContext(ctx, "Auto-restore: context cancelled", "attempts", attempt, "error", err)
 			return
+		}
+
+		// Only auto-restore REPLICA poolers - PRIMARY must be explicitly initialized.
+		// Check on each iteration because InitializeAsStandby may change the type.
+		poolerType := pm.getPoolerType()
+		if poolerType != clustermetadatapb.PoolerType_REPLICA {
+			pm.logger.InfoContext(ctx, "Auto-restore: waiting for REPLICA type", "pooler_type", poolerType.String())
+			continue
 		}
 
 		if attempt > 1 {
@@ -755,6 +758,15 @@ func (pm *MultiPoolerManager) tryAutoRestoreOnce(ctx context.Context) (success b
 	}
 
 	pm.logger.InfoContext(ctx, "Auto-restore: completed successfully", "backup_id", latestBackup.BackupId)
+
+	// Set consensus term after restore (pg_data now exists).
+	// For newly bootstrapped standbys, term is 1.
+	if pm.consensusState != nil {
+		if err := pm.consensusState.UpdateTermAndSave(ctx, 1); err != nil {
+			pm.logger.ErrorContext(ctx, "Failed to set consensus term after restore", "error", err)
+			return false, false // Retry
+		}
+	}
 
 	// After successful restore, configure primary_conninfo by looking up the shard's PRIMARY from topology
 	primary, err := pm.findShardPrimary(ctx)

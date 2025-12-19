@@ -193,16 +193,11 @@ func (pm *MultiPoolerManager) InitializeAsStandby(ctx context.Context, req *mult
 		return nil, mterrors.Wrap(err, "failed to set pooler type to REPLICA")
 	}
 
-	// Set consensus term
-	if pm.consensusState != nil {
-		if err := pm.consensusState.UpdateTermAndSave(ctx, req.ConsensusTerm); err != nil {
-			return nil, mterrors.Wrap(err, "failed to set consensus term")
-		}
-	}
+	// Note: Consensus term is set after restore completes in tryAutoRestoreOnce.
+	// We can't save it here because pg_data doesn't exist yet.
 
 	pm.logger.InfoContext(ctx, "InitializeAsStandby completed - restore will happen at startup",
-		"shard", pm.getShardID(),
-		"term", req.ConsensusTerm)
+		"shard", pm.getShardID())
 
 	return &multipoolermanagerdatapb.InitializeAsStandbyResponse{
 		Success: true,

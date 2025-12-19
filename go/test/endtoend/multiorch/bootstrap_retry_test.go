@@ -21,23 +21,17 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/multigres/multigres/go/test/utils"
-
+	"github.com/multigres/multigres/go/common/constants"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
+	"github.com/multigres/multigres/go/test/utils"
 )
 
-// TestBootstrapStandbyFailureNoRetry reproduces a bug where standby initialization
-// failures during bootstrap are not retried.
+// TestBootstrapStandbyFailureRetry verifies that standby initialization failures
+// during bootstrap are retried until successful.
 //
-// The bug: When pgbackrest restore fails (e.g., lock contention), the standby:
-// - Remains registered as UNKNOWN type (ChangeType never called)
-// - Auto-restore skips because poolerType != REPLICA
-// - ShardNeedsBootstrapAnalyzer skips because primary exists
-// - Result: Standby stays uninitialized forever
-//
-// This test documents the current (buggy) behavior. When the bug is fixed,
-// the final assertion should change from assert.False to assert.True.
-func TestBootstrapStandbyFailureNoRetry(t *testing.T) {
+// Scenario: When pgbackrest restore fails (e.g., lock contention), the standby
+// should eventually initialize after the transient failure clears.
+func TestBootstrapStandbyFailureRetry(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping end-to-end bootstrap retry test (short mode)")
 	}
@@ -46,12 +40,14 @@ func TestBootstrapStandbyFailureNoRetry(t *testing.T) {
 	}
 
 	// Setup test environment
+	// Note: Use DefaultTableGroup and DefaultShard to match what multipooler actually uses.
+	// The test helpers currently hardcode these values in the multipooler command.
 	env := setupMultiOrchTestEnv(t, testEnvConfig{
 		tempDirPrefix:    "brty*",
 		cellName:         "retry-cell",
 		database:         "postgres",
-		shardID:          "retry-shard-01",
-		tableGroup:       "test",
+		shardID:          constants.DefaultShard,
+		tableGroup:       constants.DefaultTableGroup,
 		durabilityPolicy: "ANY_2",
 		stanzaName:       "retry-test",
 	})
@@ -94,41 +90,26 @@ func TestBootstrapStandbyFailureNoRetry(t *testing.T) {
 	// - Node 2 (no fault injection) should be initialized and type=REPLICA
 	// - Node 1 (with fault injection) should have FAILED to initialize
 
-	// Verify node 1 is NOT initialized (this is the bug we're reproducing)
+	// Node 1 should be REPLICA type (set during bootstrap attempt)
 	node1 := nodes[1]
 	status1 := checkInitializationStatus(t, node1)
 	t.Logf("Node 1 status after bootstrap: IsInitialized=%v, PoolerType=%s, PostgresRunning=%v",
 		status1.IsInitialized, status1.PoolerType, status1.PostgresRunning)
 
-	// BUG ASSERTION: Node 1 should NOT be initialized because:
-	// 1. Its pgbackrest restore failed due to simulated lock
-	// 2. ChangeType was never called (only called after successful init)
-	// 3. Its type is still UNKNOWN
-	assert.False(t, status1.IsInitialized,
-		"Node 1 should NOT be initialized (restore failed due to fault injection)")
-	assert.Equal(t, clustermetadatapb.PoolerType_UNKNOWN, status1.PoolerType,
-		"Node 1 should still be UNKNOWN type (ChangeType not called)")
+	assert.Equal(t, clustermetadatapb.PoolerType_REPLICA, status1.PoolerType,
+		"Node 1 should be REPLICA type")
 
-	// Wait additional time to see if any retry mechanism kicks in.
-	// The fault injection allows success after 2 failures, so if there's a retry
-	// mechanism, the 3rd attempt would succeed. With recovery-cycle-interval=500ms,
-	// any retry would trigger within a few seconds.
-	t.Log("Waiting 10s to check if retry mechanism exists...")
-	time.Sleep(10 * time.Second)
+	// Wait for node 1 to eventually initialize via retry.
+	// The fault injection allows success after 2 failures.
+	t.Log("Waiting for node 1 to initialize via retry...")
 
-	// Check node 1 status again
+	require.Eventually(t, func() bool {
+		status := checkInitializationStatus(t, node1)
+		return status.IsInitialized
+	}, 30*time.Second, 500*time.Millisecond,
+		"Node 1 should eventually be initialized via retry")
+
 	status1After := checkInitializationStatus(t, node1)
-	t.Logf("Node 1 status after waiting: IsInitialized=%v, PoolerType=%s, PostgresRunning=%v",
+	t.Logf("Node 1 successfully initialized: IsInitialized=%v, PoolerType=%s, PostgresRunning=%v",
 		status1After.IsInitialized, status1After.PoolerType, status1After.PostgresRunning)
-
-	// BUG DOCUMENTATION: This assertion documents the current buggy behavior.
-	// Node 1 should STILL NOT be initialized because:
-	// - Auto-restore skips (poolerType != REPLICA)
-	// - ShardNeedsBootstrapAnalyzer skips (primary exists)
-	// - No other retry mechanism exists
-	//
-	// WHEN THE BUG IS FIXED: Change this to assert.True and verify the standby
-	// eventually initializes via a retry mechanism.
-	assert.False(t, status1After.IsInitialized,
-		"BUG: Node 1 remains uninitialized - no retry mechanism for failed standby bootstrap")
 }

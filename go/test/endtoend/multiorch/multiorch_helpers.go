@@ -828,13 +828,19 @@ func createFailingPgBackRestWrapper(t *testing.T, baseDir string, maxFailures in
 	counterFile := filepath.Join(baseDir, "pgbackrest_restore_attempts")
 	wrapperPath := filepath.Join(wrapperDir, "pgbackrest")
 
+	// Resolve the real pgbackrest path BEFORE creating the wrapper.
+	// This is important because the wrapper will be prepended to PATH,
+	// so $(which pgbackrest) inside the wrapper would find itself!
+	realPgBackRest, err := exec.LookPath("pgbackrest")
+	require.NoError(t, err, "pgbackrest must be installed")
+
 	// Create wrapper script that intercepts restore commands
 	wrapperScript := fmt.Sprintf(`#!/bin/bash
 # Wrapper script that fails pgbackrest restore commands for testing
 
 COUNTER_FILE="%s"
 MAX_FAILURES=%d
-REAL_PGBACKREST=$(which pgbackrest)
+REAL_PGBACKREST="%s"
 
 # Check if this is a restore command
 IS_RESTORE=false
@@ -866,7 +872,7 @@ fi
 
 # Pass through to real pgbackrest
 exec "$REAL_PGBACKREST" "$@"
-`, counterFile, maxFailures)
+`, counterFile, maxFailures, realPgBackRest)
 
 	require.NoError(t, os.WriteFile(wrapperPath, []byte(wrapperScript), 0o755))
 	t.Logf("Created failing pgbackrest wrapper at %s (max_failures=%d)", wrapperPath, maxFailures)
