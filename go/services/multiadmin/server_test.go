@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestMultiAdminServerGetCell(t *testing.T) {
@@ -156,7 +157,7 @@ func TestMultiAdminServerGetDatabase(t *testing.T) {
 		require.NotNil(t, resp)
 		require.NotNil(t, resp.Database)
 		assert.Equal(t, "testdb", resp.Database.Name)
-		assert.Equal(t, "s3://backup-bucket/testdb", resp.Database.BackupLocation)
+		assert.True(t, proto.Equal(testDatabase.BackupLocation, resp.Database.BackupLocation))
 		assert.Equal(t, "none", resp.Database.DurabilityPolicy)
 		assert.Equal(t, []string{"cell1", "cell2"}, resp.Database.Cells)
 	})

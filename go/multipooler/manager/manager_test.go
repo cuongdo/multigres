@@ -524,6 +524,81 @@ func TestGetBackupLocation(t *testing.T) {
 	assert.Equal(t, expectedShardBackupLocation, shardPath)
 }
 
+func TestGetBackupLocation_S3(t *testing.T) {
+	ctx := t.Context()
+	tmpDir := t.TempDir()
+
+	// Create test topology store
+	ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
+	defer ts.Close()
+
+	// Create test database with S3 backup location
+	database := "testdb"
+	addDatabaseToTopo(t, ts, database)
+
+	// Create manager config
+	serviceID := &clustermetadatapb.ID{
+		Component: clustermetadatapb.ID_MULTIPOOLER,
+		Cell:      "zone1",
+		Name:      "test-service",
+	}
+	config := &Config{
+		TopoClient: ts,
+		ServiceID:  serviceID,
+		PoolerDir:  filepath.Join(tmpDir, "pooler"),
+		PgctldAddr: "",
+		TableGroup: constants.DefaultTableGroup,
+		Shard:      constants.DefaultShard,
+	}
+
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	manager, err := NewMultiPoolerManager(logger, config)
+	require.NoError(t, err)
+
+	// Set the multipooler to have the database
+	multipoolerInfo := &topoclient.MultiPoolerInfo{
+		MultiPooler: &clustermetadatapb.MultiPooler{
+			Database: database,
+		},
+	}
+	manager.multipooler = multipoolerInfo
+	manager.cachedMultipooler.multipooler = topoclient.NewMultiPoolerInfo(
+		proto.Clone(multipoolerInfo.MultiPooler).(*clustermetadatapb.MultiPooler),
+		multipoolerInfo.Version(),
+	)
+
+	// Set S3 backup config
+	backupConfig, err := backup.NewConfig(&clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_S3{
+			S3: &clustermetadatapb.S3Backup{
+				Bucket:    "my-backup-bucket",
+				Region:    "us-west-2",
+				KeyPrefix: "prod/backups/",
+			},
+		},
+	})
+	require.NoError(t, err)
+	manager.backupConfig = backupConfig
+
+	// Test S3 backup config
+	assert.Equal(t, "s3", manager.backupConfig.Type())
+
+	// Verify full path includes S3 bucket, prefix, and path components
+	expectedPath := "s3://my-backup-bucket/prod/backups/testdb/default/0-inf"
+	shardPath, err := manager.backupConfig.FullPath(database, constants.DefaultTableGroup, constants.DefaultShard)
+	require.NoError(t, err)
+	assert.Equal(t, expectedPath, shardPath)
+
+	// Verify PgBackRestConfig returns correct S3 settings
+	pgbrConfig, err := manager.backupConfig.PgBackRestConfig("multigres")
+	require.NoError(t, err)
+	assert.Equal(t, "s3", pgbrConfig["repo1-type"])
+	assert.Equal(t, "my-backup-bucket", pgbrConfig["repo1-s3-bucket"])
+	assert.Equal(t, "us-west-2", pgbrConfig["repo1-s3-region"])
+	assert.Equal(t, "auto", pgbrConfig["repo1-s3-key-type"])
+	assert.Equal(t, "/prod/backups/multigres", pgbrConfig["repo1-path"])
+}
+
 // TestWaitUntilReady_Success verifies that WaitUntilReady returns immediately
 // when the manager is already in Ready state
 func TestWaitUntilReady_Success(t *testing.T) {

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 
@@ -77,7 +78,7 @@ func TestDatabaseOperations(t *testing.T) {
 				retrieved, err := ts.GetDatabase(ctx, database_a)
 				require.NoError(t, err)
 				require.Equal(t, db.Name, retrieved.Name)
-				require.Equal(t, db.BackupLocation, retrieved.BackupLocation)
+				require.True(t, proto.Equal(db.BackupLocation, retrieved.BackupLocation))
 				require.Equal(t, db.DurabilityPolicy, retrieved.DurabilityPolicy)
 				require.Equal(t, db.Cells, retrieved.Cells)
 
@@ -168,7 +169,7 @@ func TestDatabaseOperations(t *testing.T) {
 				// Verify first database was updated
 				retrieved1, err := ts.GetDatabase(ctx, database_a)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups", retrieved1.BackupLocation)
+				require.Equal(t, "/new_backups", retrieved1.BackupLocation.GetFilesystem().GetPath())
 				require.Equal(t, "semi_sync", retrieved1.DurabilityPolicy)
 
 				// You can update multiple fields at once.
@@ -180,13 +181,13 @@ func TestDatabaseOperations(t *testing.T) {
 				require.NoError(t, err)
 				retrieved1, err = ts.GetDatabase(ctx, database_a)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups_3", retrieved1.BackupLocation)
+				require.Equal(t, "/new_backups_3", retrieved1.BackupLocation.GetFilesystem().GetPath())
 				require.Equal(t, "sync", retrieved1.DurabilityPolicy)
 
 				// Verify second database was not affected
 				retrieved2, err := ts.GetDatabase(ctx, database_b)
 				require.NoError(t, err)
-				require.Equal(t, "/backups2", retrieved2.BackupLocation)
+				require.Equal(t, "/backups2", retrieved2.BackupLocation.GetFilesystem().GetPath())
 				require.Equal(t, "async", retrieved2.DurabilityPolicy)
 			},
 		},
@@ -225,7 +226,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				retrieved, err := ts.GetDatabase(ctx, database)
 				require.NoError(t, err)
 				require.Equal(t, db.Name, retrieved.Name)
-				require.Equal(t, db.BackupLocation, retrieved.BackupLocation)
+				require.True(t, proto.Equal(db.BackupLocation, retrieved.BackupLocation))
 				require.Equal(t, db.DurabilityPolicy, retrieved.DurabilityPolicy)
 				require.Equal(t, db.Cells, retrieved.Cells)
 			},
@@ -279,7 +280,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify the update
 				retrieved, err := ts.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups/test_db", retrieved.BackupLocation)
+				require.Equal(t, "/new_backups/test_db", retrieved.BackupLocation.GetFilesystem().GetPath())
 				require.Equal(t, "async", retrieved.DurabilityPolicy)
 				require.Contains(t, retrieved.Cells, "zone-2")
 			},
@@ -380,7 +381,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify database was not modified
 				retrieved, err := ts.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, "/backups/test_db", retrieved.BackupLocation)
+				require.Equal(t, "/backups/test_db", retrieved.BackupLocation.GetFilesystem().GetPath())
 				require.Equal(t, "semi_sync", retrieved.DurabilityPolicy)
 			},
 		},
@@ -421,7 +422,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Verify the update was successful
 				retrieved, err := tsWithFactory.GetDatabase(ctx, database)
 				require.NoError(t, err)
-				require.Equal(t, "/new_backups/test_db", retrieved.BackupLocation)
+				require.Equal(t, "/new_backups/test_db", retrieved.BackupLocation.GetFilesystem().GetPath())
 				require.Equal(t, "async", retrieved.DurabilityPolicy)
 			},
 		},
