@@ -37,3 +37,39 @@ func TestNewConfig_Filesystem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "filesystem", cfg.Type())
 }
+
+func TestConfig_FullPath_Filesystem(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_Filesystem{
+			Filesystem: &clustermetadatapb.FilesystemBackup{
+				Path: "/var/backups",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	path, err := cfg.FullPath("mydb", "default", "0")
+	require.NoError(t, err)
+	assert.Equal(t, "/var/backups/mydb/default/0", path)
+}
+
+func TestConfig_FullPath_S3(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_S3{
+			S3: &clustermetadatapb.S3Backup{
+				Bucket:    "my-backups",
+				Region:    "us-east-1",
+				KeyPrefix: "prod/",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	path, err := cfg.FullPath("mydb", "default", "0")
+	require.NoError(t, err)
+	assert.Equal(t, "s3://my-backups/prod/mydb/default/0", path)
+}

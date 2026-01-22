@@ -16,7 +16,9 @@ package backup
 
 import (
 	"errors"
+	"strings"
 
+	"github.com/multigres/multigres/go/common/safepath"
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 )
 
@@ -48,6 +50,49 @@ func (c *Config) Type() string {
 	default:
 		return "unknown"
 	}
+}
+
+// FullPath returns the complete backup path for a database/tablegroup/shard
+func (c *Config) FullPath(database, tableGroup, shard string) (string, error) {
+	if database == "" {
+		return "", errors.New("database cannot be empty")
+	}
+	if tableGroup == "" {
+		return "", errors.New("table group cannot be empty")
+	}
+	if shard == "" {
+		return "", errors.New("shard cannot be empty")
+	}
+
+	switch loc := c.proto.Location.(type) {
+	case *clustermetadatapb.BackupLocation_Filesystem:
+		return filesystemFullPath(loc.Filesystem.Path, database, tableGroup, shard)
+	case *clustermetadatapb.BackupLocation_S3:
+		return s3FullPath(loc.S3, database, tableGroup, shard)
+	default:
+		return "", errors.New("unknown backup location type")
+	}
+}
+
+// filesystemFullPath builds a filesystem backup path
+func filesystemFullPath(basePath, database, tableGroup, shard string) (string, error) {
+	return safepath.Join(basePath, database, tableGroup, shard)
+}
+
+// s3FullPath builds an S3 backup path
+func s3FullPath(s3 *clustermetadatapb.S3Backup, database, tableGroup, shard string) (string, error) {
+	// Start with bucket
+	path := "s3://" + s3.Bucket + "/"
+
+	// Add prefix if set
+	if s3.KeyPrefix != "" {
+		path += strings.TrimSuffix(s3.KeyPrefix, "/") + "/"
+	}
+
+	// Add database/tablegroup/shard
+	path += database + "/" + tableGroup + "/" + shard
+
+	return path, nil
 }
 
 // validate checks that the backup location is properly configured
