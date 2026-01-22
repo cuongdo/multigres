@@ -73,3 +73,85 @@ func TestConfig_FullPath_S3(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "s3://my-backups/prod/mydb/default/0", path)
 }
+
+func TestConfig_PgBackRestConfig_Filesystem(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_Filesystem{
+			Filesystem: &clustermetadatapb.FilesystemBackup{
+				Path: "/var/backups",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	pgbrCfg, err := cfg.PgBackRestConfig("multigres")
+	require.NoError(t, err)
+
+	assert.Equal(t, "posix", pgbrCfg["repo1-type"])
+	assert.Equal(t, "/var/backups", pgbrCfg["repo1-path"])
+}
+
+func TestConfig_PgBackRestConfig_S3_Basic(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_S3{
+			S3: &clustermetadatapb.S3Backup{
+				Bucket: "my-backups",
+				Region: "us-east-1",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	pgbrCfg, err := cfg.PgBackRestConfig("multigres")
+	require.NoError(t, err)
+
+	assert.Equal(t, "s3", pgbrCfg["repo1-type"])
+	assert.Equal(t, "my-backups", pgbrCfg["repo1-s3-bucket"])
+	assert.Equal(t, "us-east-1", pgbrCfg["repo1-s3-region"])
+	assert.Equal(t, "auto", pgbrCfg["repo1-s3-key-type"])
+	assert.Equal(t, "/multigres", pgbrCfg["repo1-path"])
+}
+
+func TestConfig_PgBackRestConfig_S3_WithPrefix(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_S3{
+			S3: &clustermetadatapb.S3Backup{
+				Bucket:    "my-backups",
+				Region:    "us-east-1",
+				KeyPrefix: "prod/",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	pgbrCfg, err := cfg.PgBackRestConfig("multigres")
+	require.NoError(t, err)
+
+	assert.Equal(t, "/prod/multigres", pgbrCfg["repo1-path"])
+}
+
+func TestConfig_PgBackRestConfig_S3_WithEndpoint(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_S3{
+			S3: &clustermetadatapb.S3Backup{
+				Bucket:   "my-backups",
+				Region:   "us-east-1",
+				Endpoint: "https://minio.example.com",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	pgbrCfg, err := cfg.PgBackRestConfig("multigres")
+	require.NoError(t, err)
+
+	assert.Equal(t, "https://minio.example.com", pgbrCfg["repo1-s3-endpoint"])
+}

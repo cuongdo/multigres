@@ -95,6 +95,42 @@ func s3FullPath(s3 *clustermetadatapb.S3Backup, database, tableGroup, shard stri
 	return path, nil
 }
 
+// PgBackRestConfig returns pgBackRest-specific configuration
+func (c *Config) PgBackRestConfig(stanzaName string) (map[string]string, error) {
+	switch loc := c.proto.Location.(type) {
+	case *clustermetadatapb.BackupLocation_Filesystem:
+		return map[string]string{
+			"repo1-type": "posix",
+			"repo1-path": loc.Filesystem.Path,
+		}, nil
+
+	case *clustermetadatapb.BackupLocation_S3:
+		config := map[string]string{
+			"repo1-type":        "s3",
+			"repo1-s3-bucket":   loc.S3.Bucket,
+			"repo1-s3-region":   loc.S3.Region,
+			"repo1-s3-key-type": "auto", // Use IAM role or env vars
+		}
+
+		// Optional endpoint for S3-compatible storage
+		if loc.S3.Endpoint != "" {
+			config["repo1-s3-endpoint"] = loc.S3.Endpoint
+		}
+
+		// Repo path includes prefix if set
+		path := "/" + stanzaName
+		if loc.S3.KeyPrefix != "" {
+			path = "/" + strings.TrimSuffix(loc.S3.KeyPrefix, "/") + path
+		}
+		config["repo1-path"] = path
+
+		return config, nil
+
+	default:
+		return nil, errors.New("unknown backup location type")
+	}
+}
+
 // validate checks that the backup location is properly configured
 func validate(loc *clustermetadatapb.BackupLocation) error {
 	if loc.Location == nil {
