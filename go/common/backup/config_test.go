@@ -155,3 +155,114 @@ func TestConfig_PgBackRestConfig_S3_WithEndpoint(t *testing.T) {
 
 	assert.Equal(t, "https://minio.example.com", pgbrCfg["repo1-s3-endpoint"])
 }
+
+func TestNewConfig_Validation(t *testing.T) {
+	tests := []struct {
+		name    string
+		loc     *clustermetadatapb.BackupLocation
+		wantErr string
+	}{
+		{
+			name:    "nil location",
+			loc:     nil,
+			wantErr: "backup location cannot be nil",
+		},
+		{
+			name:    "no location set",
+			loc:     &clustermetadatapb.BackupLocation{},
+			wantErr: "no backup location configured",
+		},
+		{
+			name: "filesystem missing path",
+			loc: &clustermetadatapb.BackupLocation{
+				Location: &clustermetadatapb.BackupLocation_Filesystem{
+					Filesystem: &clustermetadatapb.FilesystemBackup{
+						Path: "",
+					},
+				},
+			},
+			wantErr: "filesystem path is required",
+		},
+		{
+			name: "s3 missing bucket",
+			loc: &clustermetadatapb.BackupLocation{
+				Location: &clustermetadatapb.BackupLocation_S3{
+					S3: &clustermetadatapb.S3Backup{
+						Region: "us-east-1",
+					},
+				},
+			},
+			wantErr: "s3 bucket is required",
+		},
+		{
+			name: "s3 missing region",
+			loc: &clustermetadatapb.BackupLocation{
+				Location: &clustermetadatapb.BackupLocation_S3{
+					S3: &clustermetadatapb.S3Backup{
+						Bucket: "my-backups",
+					},
+				},
+			},
+			wantErr: "s3 region is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := backup.NewConfig(tt.loc)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+func TestConfig_FullPath_Validation(t *testing.T) {
+	loc := &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_Filesystem{
+			Filesystem: &clustermetadatapb.FilesystemBackup{
+				Path: "/var/backups",
+			},
+		},
+	}
+
+	cfg, err := backup.NewConfig(loc)
+	require.NoError(t, err)
+
+	tests := []struct {
+		name       string
+		database   string
+		tableGroup string
+		shard      string
+		wantErr    string
+	}{
+		{
+			name:       "empty database",
+			database:   "",
+			tableGroup: "default",
+			shard:      "0",
+			wantErr:    "database cannot be empty",
+		},
+		{
+			name:       "empty tableGroup",
+			database:   "mydb",
+			tableGroup: "",
+			shard:      "0",
+			wantErr:    "table group cannot be empty",
+		},
+		{
+			name:       "empty shard",
+			database:   "mydb",
+			tableGroup: "default",
+			shard:      "",
+			wantErr:    "shard cannot be empty",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := cfg.FullPath(tt.database, tt.tableGroup, tt.shard)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
