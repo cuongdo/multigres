@@ -1615,8 +1615,14 @@ func (p *localProvisioner) ProvisionDatabase(ctx context.Context, databaseName s
 		fmt.Printf("⚙️  - Creating database \"%s\" with cells: [%s]...\n", databaseName, strings.Join(cellNames, ", "))
 
 		databaseConfig := &clustermetadatapb.Database{
-			Name:             databaseName,
-			BackupLocation:   p.config.BackupRepoPath,
+			Name: databaseName,
+			BackupLocation: &clustermetadatapb.BackupLocation{
+				Location: &clustermetadatapb.BackupLocation_Filesystem{
+					Filesystem: &clustermetadatapb.FilesystemBackup{
+						Path: p.config.BackupRepoPath,
+					},
+				},
+			},
 			DurabilityPolicy: "ANY_2",   // Default durability policy for bootstrap
 			Cells:            cellNames, // Register with all cells
 		}

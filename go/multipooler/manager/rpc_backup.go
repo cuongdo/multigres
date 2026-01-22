@@ -96,9 +96,9 @@ func (pm *MultiPoolerManager) initPgBackRest(ctx context.Context, mode PgBackRes
 		}
 	}
 
-	// Validate backup location is set (requires topology to be loaded)
-	if pm.backupLocation == "" {
-		return "", errors.New("backup location not set; topology may not be loaded yet")
+	// Validate backup config is loaded from topology
+	if pm.backupConfig == nil {
+		return "", errors.New("backup config not loaded from topology")
 	}
 
 	// Generate pgbackrest config file from template
@@ -107,12 +107,19 @@ func (pm *MultiPoolerManager) initPgBackRest(ctx context.Context, mode PgBackRes
 		return "", fmt.Errorf("failed to parse pgbackrest config template: %w", err)
 	}
 
+	// Generate pgBackRest repo configuration
+	repoConfig, err := pm.backupConfig.PgBackRestConfig(pm.stanzaName())
+	if err != nil {
+		return "", fmt.Errorf("failed to generate repo config: %w", err)
+	}
+
 	templateData := struct {
 		LogPath   string
 		SpoolPath string
 		LockPath  string
 
-		Repo1Path string
+		// Dynamic repo configuration
+		RepoConfig map[string]string
 
 		Pg1SocketPath string
 		Pg1Port       int
@@ -137,7 +144,7 @@ func (pm *MultiPoolerManager) initPgBackRest(ctx context.Context, mode PgBackRes
 		SpoolPath: spoolPath,
 		LockPath:  lockPath,
 
-		Repo1Path: pm.backupLocation,
+		RepoConfig: repoConfig,
 
 		Pg1SocketPath: filepath.Join(pm.config.PoolerDir, "pg_sockets"),
 		Pg1Port:       pm.config.PgPort,
@@ -207,7 +214,7 @@ func (pm *MultiPoolerManager) backupLocked(ctx context.Context, forcePrimary boo
 		return "", err
 	}
 
-	pm.logger.InfoContext(ctx, "Starting backup operation", "backup_location", pm.backupLocation, "backup_type", backupType)
+	pm.logger.InfoContext(ctx, "Starting backup operation", "backup_type", pm.backupConfig.Type(), "job_type", backupType)
 
 	// Check if backup is allowed on primary
 	if err := pm.allowBackupOnPrimary(ctx, forcePrimary); err != nil {
@@ -349,7 +356,7 @@ func (pm *MultiPoolerManager) restoreFromBackupLocked(ctx context.Context, backu
 		return err
 	}
 
-	pm.logger.InfoContext(ctx, "Starting restore operation", "backup_location", pm.backupLocation, "backup_id", backupID)
+	pm.logger.InfoContext(ctx, "Starting restore operation", "backup_type", pm.backupConfig.Type(), "backup_id", backupID)
 
 	// Check that this is a standby, not a primary
 	poolerType := pm.getPoolerType()
@@ -521,8 +528,8 @@ func (pm *MultiPoolerManager) listBackups(ctx context.Context) ([]*multipoolerma
 		return nil, mterrors.Wrap(err, "failed to initialize pgbackrest")
 	}
 
-	if pm.backupLocation == "" {
-		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "backup_location is required")
+	if pm.backupConfig == nil {
+		return nil, mterrors.New(mtrpcpb.Code_INVALID_ARGUMENT, "backup config not loaded from topology")
 	}
 
 	// Execute pgbackrest info command with JSON output

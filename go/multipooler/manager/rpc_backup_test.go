@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/multigres/multigres/go/common/backup"
 	"github.com/multigres/multigres/go/common/constants"
 	"github.com/multigres/multigres/go/common/topoclient"
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
@@ -72,25 +73,35 @@ func createTestManagerWithBackupLocation(poolerDir, tableGroup, shard string, po
 		},
 	}
 
-	// Create a topology store with backup location (base path) if provided
+	// Create a topology store with backup location if provided
 	var topoClient topoclient.Store
+	var backupConfig *backup.Config
 	if backupLocation != "" {
 		ctx := context.Background()
 		ts, _ := memorytopo.NewServerAndFactory(ctx, "zone1")
 		err := ts.CreateDatabase(ctx, database, &clustermetadatapb.Database{
-			Name:             database,
-			BackupLocation:   backupLocation, // Base path in topology
+			Name: database,
+			BackupLocation: &clustermetadatapb.BackupLocation{
+				Location: &clustermetadatapb.BackupLocation_Filesystem{
+					Filesystem: &clustermetadatapb.FilesystemBackup{
+						Path: backupLocation,
+					},
+				},
+			},
 			DurabilityPolicy: "ANY_2",
 		})
 		if err == nil {
 			topoClient = ts
 		}
-	}
 
-	// Compute full backup location: base path + database/tablegroup/shard
-	fullBackupLocation := ""
-	if backupLocation != "" {
-		fullBackupLocation = filepath.Join(backupLocation, database, tableGroup, shard)
+		// Create backup config
+		backupConfig, _ = backup.NewConfig(&clustermetadatapb.BackupLocation{
+			Location: &clustermetadatapb.BackupLocation_Filesystem{
+				Filesystem: &clustermetadatapb.FilesystemBackup{
+					Path: backupLocation,
+				},
+			},
+		})
 	}
 
 	monitorRunner := timer.NewPeriodicRunner(context.TODO(), 10*time.Second)
@@ -102,14 +113,14 @@ func createTestManagerWithBackupLocation(poolerDir, tableGroup, shard string, po
 			TableGroup: tableGroup,
 			Shard:      shard,
 		},
-		serviceID:      &clustermetadatapb.ID{Name: "test-service"},
-		topoClient:     topoClient,
-		multipooler:    multipoolerInfo,
-		state:          ManagerStateReady,
-		backupLocation: fullBackupLocation,
-		actionLock:     NewActionLock(),
-		logger:         slog.Default(),
-		pgMonitor:      monitorRunner,
+		serviceID:    &clustermetadatapb.ID{Name: "test-service"},
+		topoClient:   topoClient,
+		multipooler:  multipoolerInfo,
+		state:        ManagerStateReady,
+		backupConfig: backupConfig,
+		actionLock:   NewActionLock(),
+		logger:       slog.Default(),
+		pgMonitor:    monitorRunner,
 		cachedMultipooler: cachedMultiPoolerInfo{
 			multipooler: topoclient.NewMultiPoolerInfo(
 				proto.Clone(multipoolerInfo.MultiPooler).(*clustermetadatapb.MultiPooler),

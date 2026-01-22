@@ -269,16 +269,22 @@ func New(t *testing.T, opts ...SetupOption) *ShardSetup {
 	t.Logf("Created topology cell '%s' at etcd %s", config.CellName, etcdClientAddr)
 
 	// Create the database entry in topology with backup_location
-	backupLocation := filepath.Join(tempDir, "backup-repo")
+	backupDir := filepath.Join(tempDir, "backup-repo")
 	err = ts.CreateDatabase(context.Background(), config.Database, &clustermetadatapb.Database{
-		Name:             config.Database,
-		BackupLocation:   backupLocation,
+		Name: config.Database,
+		BackupLocation: &clustermetadatapb.BackupLocation{
+			Location: &clustermetadatapb.BackupLocation_Filesystem{
+				Filesystem: &clustermetadatapb.FilesystemBackup{
+					Path: backupDir,
+				},
+			},
+		},
 		DurabilityPolicy: config.DurabilityPolicy,
 	})
 	if err != nil {
 		t.Fatalf("failed to create database in topology: %v", err)
 	}
-	t.Logf("Created database '%s' in topology with backup_location=%s", config.Database, backupLocation)
+	t.Logf("Created database '%s' in topology with backup_location=%s", config.Database, backupDir)
 
 	setup := &ShardSetup{
 		TempDir:            tempDir,
