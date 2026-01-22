@@ -27,6 +27,17 @@ import (
 	"github.com/multigres/multigres/go/common/topoclient/memorytopo"
 )
 
+// Helper function to create a filesystem BackupLocation
+func filesystemBackupLocation(path string) *clustermetadatapb.BackupLocation {
+	return &clustermetadatapb.BackupLocation{
+		Location: &clustermetadatapb.BackupLocation_Filesystem{
+			Filesystem: &clustermetadatapb.FilesystemBackup{
+				Path: path,
+			},
+		},
+	}
+}
+
 func TestDatabaseOperations(t *testing.T) {
 	ctx := context.Background()
 	cell := "zone-1"
@@ -49,7 +60,7 @@ func TestDatabaseOperations(t *testing.T) {
 				// Create a database
 				db := &clustermetadatapb.Database{
 					Name:             database_a,
-					BackupLocation:   "/backups",
+					BackupLocation:   filesystemBackupLocation("/backups"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
@@ -86,13 +97,13 @@ func TestDatabaseOperations(t *testing.T) {
 				// Create multiple databases
 				db1 := &clustermetadatapb.Database{
 					Name:             database_a,
-					BackupLocation:   "/backups",
+					BackupLocation:   filesystemBackupLocation("/backups"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
 				db2 := &clustermetadatapb.Database{
 					Name:             database_b,
-					BackupLocation:   "/backups2",
+					BackupLocation:   filesystemBackupLocation("/backups2"),
 					DurabilityPolicy: "async",
 					Cells:            []string{cell2},
 				}
@@ -131,13 +142,13 @@ func TestDatabaseOperations(t *testing.T) {
 				// Create databases with different configurations
 				db1 := &clustermetadatapb.Database{
 					Name:             database_a,
-					BackupLocation:   "/backups",
+					BackupLocation:   filesystemBackupLocation("/backups"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell, cell2},
 				}
 				db2 := &clustermetadatapb.Database{
 					Name:             database_b,
-					BackupLocation:   "/backups2",
+					BackupLocation:   filesystemBackupLocation("/backups2"),
 					DurabilityPolicy: "async",
 					Cells:            []string{cell},
 				}
@@ -149,7 +160,7 @@ func TestDatabaseOperations(t *testing.T) {
 
 				// Update one database
 				err = ts.UpdateDatabaseFields(ctx, database_a, func(db *clustermetadatapb.Database) error {
-					db.BackupLocation = "/new_backups"
+					db.BackupLocation = filesystemBackupLocation("/new_backups")
 					return nil
 				})
 				require.NoError(t, err)
@@ -162,7 +173,7 @@ func TestDatabaseOperations(t *testing.T) {
 
 				// You can update multiple fields at once.
 				err = ts.UpdateDatabaseFields(ctx, database_a, func(db *clustermetadatapb.Database) error {
-					db.BackupLocation = "/new_backups_3"
+					db.BackupLocation = filesystemBackupLocation("/new_backups_3")
 					db.DurabilityPolicy = "sync"
 					return nil
 				})
@@ -204,7 +215,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				db := &clustermetadatapb.Database{
 					Name:             database,
-					BackupLocation:   "/backups/test_db",
+					BackupLocation:   filesystemBackupLocation("/backups/test_db"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell, "zone-2"},
 				}
@@ -232,7 +243,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				db := &clustermetadatapb.Database{
 					Name:             database,
-					BackupLocation:   "/backups/test_db",
+					BackupLocation:   filesystemBackupLocation("/backups/test_db"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
@@ -249,7 +260,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				db := &clustermetadatapb.Database{
 					Name:             database,
-					BackupLocation:   "/backups/test_db",
+					BackupLocation:   filesystemBackupLocation("/backups/test_db"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
@@ -258,7 +269,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 
 				// Update the database
 				err = ts.UpdateDatabaseFields(ctx, database, func(db *clustermetadatapb.Database) error {
-					db.BackupLocation = "/new_backups/test_db"
+					db.BackupLocation = filesystemBackupLocation("/new_backups/test_db")
 					db.DurabilityPolicy = "async"
 					db.Cells = append(db.Cells, "zone-2")
 					return nil
@@ -278,7 +289,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				err := ts.UpdateDatabaseFields(ctx, "new_db", func(db *clustermetadatapb.Database) error {
 					db.Name = "new_db"
-					db.BackupLocation = "/backups/new_db"
+					db.BackupLocation = filesystemBackupLocation("/backups/new_db")
 					db.DurabilityPolicy = "sync"
 					db.Cells = []string{cell}
 					return nil
@@ -296,7 +307,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				db := &clustermetadatapb.Database{
 					Name:             database,
-					BackupLocation:   "/backups/test_db",
+					BackupLocation:   filesystemBackupLocation("/backups/test_db"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
@@ -319,13 +330,13 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 				// Create multiple databases
 				db1 := &clustermetadatapb.Database{
 					Name:             "db1",
-					BackupLocation:   "/backups/db1",
+					BackupLocation:   filesystemBackupLocation("/backups/db1"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
 				db2 := &clustermetadatapb.Database{
 					Name:             "db2",
-					BackupLocation:   "/backups/db2",
+					BackupLocation:   filesystemBackupLocation("/backups/db2"),
 					DurabilityPolicy: "async",
 					Cells:            []string{cell},
 				}
@@ -351,7 +362,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 			test: func(t *testing.T, ts topoclient.Store) {
 				db := &clustermetadatapb.Database{
 					Name:             database,
-					BackupLocation:   "/backups/test_db",
+					BackupLocation:   filesystemBackupLocation("/backups/test_db"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
@@ -382,7 +393,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 
 				db := &clustermetadatapb.Database{
 					Name:             database,
-					BackupLocation:   "/backups/test_db",
+					BackupLocation:   filesystemBackupLocation("/backups/test_db"),
 					DurabilityPolicy: "semi_sync",
 					Cells:            []string{cell},
 				}
@@ -398,7 +409,7 @@ func TestDatabaseCRUDOperations(t *testing.T) {
 
 				err = tsWithFactory.UpdateDatabaseFields(ctx, database, func(db *clustermetadatapb.Database) error {
 					updateCallCount++
-					db.BackupLocation = "/new_backups/test_db"
+					db.BackupLocation = filesystemBackupLocation("/new_backups/test_db")
 					db.DurabilityPolicy = "async"
 					return nil
 				})

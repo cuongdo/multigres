@@ -132,8 +132,15 @@ func TestMultiAdminServerGetDatabase(t *testing.T) {
 	t.Run("existing database returns database data", func(t *testing.T) {
 		// First create a database
 		testDatabase := &clustermetadatapb.Database{
-			Name:             "testdb",
-			BackupLocation:   "s3://backup-bucket/testdb",
+			Name: "testdb",
+			BackupLocation: &clustermetadatapb.BackupLocation{
+				Location: &clustermetadatapb.BackupLocation_S3{
+					S3: &clustermetadatapb.S3Backup{
+						Bucket: "backup-bucket",
+						Region: "us-east-1",
+					},
+				},
+			},
 			DurabilityPolicy: "none",
 			Cells:            []string{"cell1", "cell2"},
 		}
