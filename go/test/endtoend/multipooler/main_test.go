@@ -30,26 +30,85 @@ import (
 	pgctldpb "github.com/multigres/multigres/go/pb/pgctldservice"
 )
 
-// setupManager manages the shared test setup for tests in this package.
-var setupManager = shardsetup.NewSharedSetupManager(func(t *testing.T) *shardsetup.ShardSetup {
-	// Create a 2-node cluster for testing (primary + standby)
+// filesystemSetupManager manages the shared test setup for filesystem backend tests.
+var filesystemSetupManager = shardsetup.NewSharedSetupManager(func(t *testing.T) *shardsetup.ShardSetup {
+	// Create a 2-node cluster for testing (primary + standby) with filesystem backup
 	return shardsetup.New(t, shardsetup.WithMultipoolerCount(2))
+})
+
+// minioSetupManager manages the shared test setup for MinIO/S3 backend tests.
+var minioSetupManager = shardsetup.NewSharedSetupManager(func(t *testing.T) *shardsetup.ShardSetup {
+	// Create a 2-node cluster for testing (primary + standby) with S3 backup
+	minioEndpoint := os.Getenv("MULTIGRES_MINIO_ENDPOINT")
+	return shardsetup.New(t,
+		shardsetup.WithMultipoolerCount(2),
+		shardsetup.WithS3Backup("multigres", "us-east-1", minioEndpoint),
+	)
 })
 
 // TestMain sets the path and cleans up after all tests.
 func TestMain(m *testing.M) {
 	exitCode := shardsetup.RunTestMain(m)
 	if exitCode != 0 {
-		setupManager.DumpLogs()
+		filesystemSetupManager.DumpLogs()
+		minioSetupManager.DumpLogs()
 	}
-	setupManager.Cleanup()
+	filesystemSetupManager.Cleanup()
+	minioSetupManager.Cleanup()
 	os.Exit(exitCode) //nolint:forbidigo // TestMain() is allowed to call os.Exit
 }
 
-// getSharedSetup returns the shared setup for tests.
+// getSharedSetup returns the shared setup for tests (filesystem backend).
 func getSharedSetup(t *testing.T) *shardsetup.ShardSetup {
 	t.Helper()
-	return setupManager.Get(t)
+	return filesystemSetupManager.Get(t)
+}
+
+// backendConfig holds configuration for a backup backend.
+type backendConfig struct {
+	name     string // "filesystem" or "minio"
+	setupOpt shardsetup.SetupOption
+}
+
+// getAvailableBackends returns the list of backup backends available for testing.
+// Filesystem backend always available. MinIO backend available if MULTIGRES_MINIO_ENDPOINT is set.
+func getAvailableBackends(t *testing.T) []backendConfig {
+	t.Helper()
+
+	backends := []backendConfig{
+		{
+			name:     "filesystem",
+			setupOpt: nil, // Uses default filesystem backup
+		},
+	}
+
+	// Check if MinIO is available
+	minioEndpoint := os.Getenv("MULTIGRES_MINIO_ENDPOINT")
+	if minioEndpoint != "" {
+		backends = append(backends, backendConfig{
+			name:     "minio",
+			setupOpt: shardsetup.WithS3Backup("multigres", "us-east-1", minioEndpoint),
+		})
+		t.Logf("MinIO backend available at %s", minioEndpoint)
+	} else {
+		t.Log("MinIO backend not available (MULTIGRES_MINIO_ENDPOINT not set)")
+	}
+
+	return backends
+}
+
+// getSetupForBackend returns the appropriate shared setup for the given backend.
+func getSetupForBackend(t *testing.T, backend backendConfig) *MultipoolerTestSetup {
+	t.Helper()
+
+	var setup *shardsetup.ShardSetup
+	if backend.name == "minio" {
+		setup = minioSetupManager.Get(t)
+	} else {
+		setup = filesystemSetupManager.Get(t)
+	}
+
+	return newMultipoolerTestSetup(setup)
 }
 
 // restoreAfterEmergencyDemotion restores a pooler to a working state after emergency demotion.
