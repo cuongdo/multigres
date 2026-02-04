@@ -141,13 +141,13 @@ func (icmd *initCmd) buildBackupConfig(configPaths []string) (map[string]string,
 	fmt.Printf("Generated S3 backup prefix: %s\n", timestampedPrefix)
 
 	// Validate credentials and S3 access
-	accessKey := os.Getenv("AWS_ACCESS_KEY_ID")
-	secretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
-	sessionToken := os.Getenv("AWS_SESSION_TOKEN")
-
-	if accessKey == "" || secretKey == "" {
-		return nil, errors.New("AWS credentials not found in environment\nSet these environment variables:\n  export AWS_ACCESS_KEY_ID=your-key-id\n  export AWS_SECRET_ACCESS_KEY=your-secret-key\n  export AWS_SESSION_TOKEN=your-token  # Optional")
+	creds, err := s3tools.ReadCredentialsFromEnv()
+	if err != nil {
+		return nil, fmt.Errorf("AWS credentials not found in environment variables: %w\nSet these environment variables:\n  export AWS_ACCESS_KEY_ID=your-key-id\n  export AWS_SECRET_ACCESS_KEY=your-secret-key\n  export AWS_SESSION_TOKEN=your-token  # Optional", err)
 	}
+	accessKey := creds.AccessKey
+	secretKey := creds.SecretKey
+	sessionToken := creds.SessionToken
 
 	fmt.Println("AWS credentials detected in environment ✓")
 	fmt.Println("Validating S3 access...")
