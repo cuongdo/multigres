@@ -14,13 +14,13 @@
 # limitations under the License.
 
 #
-# setup_minio.sh - Set up MinIO for local S3 testing
+# start_minio.sh - Start MinIO for local S3 testing
 #
-# This script installs MinIO from source and starts it with HTTPS enabled
-# for testing Multigres S3 backup functionality.
+# This script installs MinIO from source and starts it in the background
+# with HTTPS enabled for testing Multigres S3 backup functionality.
 #
 # Usage:
-#   ./scripts/setup_minio.sh
+#   ./scripts/start_minio.sh
 #
 # Environment:
 #   - MinIO endpoint: https://localhost:9000
@@ -161,8 +161,38 @@ create_test_bucket() {
   fi
 }
 
-# Start bucket creation in background
-create_test_bucket &
+# Start MinIO server in background
+echo "Starting MinIO server in background..."
+"${PROJECT_ROOT}/bin/minio" server "${MINIO_OPTS[@]}" "${MINIO_DATA_DIR}" >/tmp/minio.log 2>&1 &
+MINIO_PID=$!
+echo "MinIO started with PID ${MINIO_PID}"
 
-echo "Starting MinIO server (press Ctrl+C to stop)..."
-"${PROJECT_ROOT}/bin/minio" server "${MINIO_OPTS[@]}" "${MINIO_DATA_DIR}"
+# Wait for MinIO to be ready
+echo "Waiting for MinIO to start..."
+for i in {1..30}; do
+  if curl -k -sf https://localhost:${MINIO_PORT}/minio/health/live >/dev/null 2>&1; then
+    echo "✓ MinIO is ready"
+    break
+  fi
+  if [ "$i" -eq 30 ]; then
+    echo "Error: MinIO failed to start"
+    cat /tmp/minio.log
+    exit 1
+  fi
+  sleep 1
+done
+
+# Create test bucket (now that MinIO is running)
+create_test_bucket
+
+echo ""
+echo "MinIO is running in background (PID: ${MINIO_PID})"
+echo "Logs: /tmp/minio.log"
+echo ""
+echo "To use in tests, export these environment variables:"
+echo "  export MULTIGRES_MINIO_ENDPOINT=https://localhost:${MINIO_PORT}"
+echo "  export AWS_ACCESS_KEY_ID=minioadmin"
+echo "  export AWS_SECRET_ACCESS_KEY=minioadmin"
+echo ""
+echo "To stop MinIO: kill ${MINIO_PID}"
+echo "To view logs: tail -f /tmp/minio.log"

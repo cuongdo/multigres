@@ -43,7 +43,14 @@ jobs:
       - name: Build
         run: make build
 
+      - name: Set up MinIO
+        run: ./scripts/start_minio.sh
+
       - name: Run integration tests
+        env:
+          MULTIGRES_MINIO_ENDPOINT: https://localhost:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
         run: go test -json -v -skip TestPostgreSQLRegression ./go/test/endtoend/... | tee integration-test-results.jsonl | go tool tparse -follow
 
       - name: Test Report
