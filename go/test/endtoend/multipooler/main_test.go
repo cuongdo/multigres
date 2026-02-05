@@ -24,6 +24,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/multigres/multigres/go/test/endtoend/shardsetup"
+	"github.com/multigres/multigres/go/tools/s3mock"
 
 	clustermetadatapb "github.com/multigres/multigres/go/pb/clustermetadata"
 	multipoolermanagerdatapb "github.com/multigres/multigres/go/pb/multipoolermanagerdata"
@@ -36,13 +37,54 @@ var filesystemSetupManager = shardsetup.NewSharedSetupManager(func(t *testing.T)
 	return shardsetup.New(t, shardsetup.WithMultipoolerCount(2))
 })
 
-// minioSetupManager manages the shared test setup for MinIO/S3 backend tests.
-var minioSetupManager = shardsetup.NewSharedSetupManager(func(t *testing.T) *shardsetup.ShardSetup {
-	// Create a 2-node cluster for testing (primary + standby) with S3 backup
-	minioEndpoint := os.Getenv("MULTIGRES_MINIO_ENDPOINT")
+// sharedS3MockServer stores the s3mock server instance shared across all s3 backend tests.
+// Cleaned up in TestMain after all tests complete.
+var sharedS3MockServer *s3mock.Server
+
+// s3SetupManager manages the shared test setup for s3mock backend tests.
+// Creates an embedded s3mock server on first Get() call.
+var s3SetupManager = shardsetup.NewSharedSetupManager(func(t *testing.T) *shardsetup.ShardSetup {
+	t.Helper()
+
+	// Create embedded s3mock server (only once, shared across all s3 backend tests)
+	if sharedS3MockServer == nil {
+		var err error
+		sharedS3MockServer, err = s3mock.NewServer()
+		if err != nil {
+			t.Fatalf("Failed to start s3mock: %v", err)
+		}
+
+		// Create the "multigres" bucket for testing
+		if err := sharedS3MockServer.CreateBucket("multigres"); err != nil {
+			t.Fatalf("Failed to create multigres bucket: %v", err)
+		}
+
+		t.Logf("s3mock started at %s", sharedS3MockServer.Endpoint())
+	}
+
+	// Set dummy AWS credentials for pgBackRest (s3mock doesn't check them)
+	// Save original values to restore after test
+	origAccessKey := os.Getenv("AWS_ACCESS_KEY_ID")
+	origSecretKey := os.Getenv("AWS_SECRET_ACCESS_KEY")
+	os.Setenv("AWS_ACCESS_KEY_ID", "test-access-key")
+	os.Setenv("AWS_SECRET_ACCESS_KEY", "test-secret-key")
+	t.Cleanup(func() {
+		if origAccessKey == "" {
+			os.Unsetenv("AWS_ACCESS_KEY_ID")
+		} else {
+			os.Setenv("AWS_ACCESS_KEY_ID", origAccessKey)
+		}
+		if origSecretKey == "" {
+			os.Unsetenv("AWS_SECRET_ACCESS_KEY")
+		} else {
+			os.Setenv("AWS_SECRET_ACCESS_KEY", origSecretKey)
+		}
+	})
+
+	// Create a 2-node cluster for testing (primary + standby) with s3mock backup
 	return shardsetup.New(t,
 		shardsetup.WithMultipoolerCount(2),
-		shardsetup.WithS3Backup("multigres", "us-east-1", minioEndpoint),
+		shardsetup.WithS3Backup("multigres", "us-east-1", sharedS3MockServer.Endpoint()),
 	)
 })
 
@@ -51,10 +93,18 @@ func TestMain(m *testing.M) {
 	exitCode := shardsetup.RunTestMain(m)
 	if exitCode != 0 {
 		filesystemSetupManager.DumpLogs()
-		minioSetupManager.DumpLogs()
+		s3SetupManager.DumpLogs()
 	}
 	filesystemSetupManager.Cleanup()
-	minioSetupManager.Cleanup()
+	s3SetupManager.Cleanup()
+
+	// Stop shared s3mock server if it was created
+	if sharedS3MockServer != nil {
+		if err := sharedS3MockServer.Stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to stop s3mock: %v\n", err)
+		}
+	}
+
 	os.Exit(exitCode) //nolint:forbidigo // TestMain() is allowed to call os.Exit
 }
 
@@ -64,46 +114,17 @@ func getSharedSetup(t *testing.T) *shardsetup.ShardSetup {
 	return filesystemSetupManager.Get(t)
 }
 
-// backendConfig holds configuration for a backup backend.
-type backendConfig struct {
-	name     string // "filesystem" or "minio"
-	setupOpt shardsetup.SetupOption
-}
-
-// getAvailableBackends returns the list of backup backends available for testing.
-// Filesystem backend always available. MinIO backend available if MULTIGRES_MINIO_ENDPOINT is set.
-func getAvailableBackends(t *testing.T) []backendConfig {
-	t.Helper()
-
-	backends := []backendConfig{
-		{
-			name:     "filesystem",
-			setupOpt: nil, // Uses default filesystem backup
-		},
-	}
-
-	// Check if MinIO is available
-	minioEndpoint := os.Getenv("MULTIGRES_MINIO_ENDPOINT")
-	if minioEndpoint != "" {
-		backends = append(backends, backendConfig{
-			name:     "minio",
-			setupOpt: shardsetup.WithS3Backup("multigres", "us-east-1", minioEndpoint),
-		})
-		t.Logf("MinIO backend available at %s", minioEndpoint)
-	} else {
-		t.Log("MinIO backend not available (MULTIGRES_MINIO_ENDPOINT not set)")
-	}
-
-	return backends
-}
+// availableBackends lists the backup backends available for testing.
+// Both filesystem and s3mock backends are always available.
+var availableBackends = []string{"filesystem", "s3"}
 
 // getSetupForBackend returns the appropriate shared setup for the given backend.
-func getSetupForBackend(t *testing.T, backend backendConfig) *MultipoolerTestSetup {
+func getSetupForBackend(t *testing.T, backendName string) *MultipoolerTestSetup {
 	t.Helper()
 
 	var setup *shardsetup.ShardSetup
-	if backend.name == "minio" {
-		setup = minioSetupManager.Get(t)
+	if backendName == "s3" {
+		setup = s3SetupManager.Get(t)
 	} else {
 		setup = filesystemSetupManager.Get(t)
 	}

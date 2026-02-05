@@ -84,9 +84,9 @@ func TestBackup_CreateListAndRestore(t *testing.T) {
 		t.Skip("Skipping end-to-end tests in short mode")
 	}
 
-	backends := getAvailableBackends(t)
+	backends := availableBackends
 	for _, backend := range backends {
-		t.Run(backend.name, func(t *testing.T) {
+		t.Run(backend, func(t *testing.T) {
 			setup := getSetupForBackend(t, backend)
 			setupPoolerTest(t, setup, WithDropTables("backup_restore_test"))
 
@@ -446,9 +446,9 @@ func TestBackup_FromStandby(t *testing.T) {
 		t.Skip("Skipping end-to-end tests in short mode")
 	}
 
-	backends := getAvailableBackends(t)
+	backends := availableBackends
 	for _, backend := range backends {
-		t.Run(backend.name, func(t *testing.T) {
+		t.Run(backend, func(t *testing.T) {
 			setup := getSetupForBackend(t, backend)
 			setupPoolerTest(t, setup)
 
@@ -483,9 +483,9 @@ func TestBackup_MultiAdminAPIs(t *testing.T) {
 		t.Skip("Skipping end-to-end tests in short mode")
 	}
 
-	backends := getAvailableBackends(t)
+	backends := availableBackends
 	for _, backend := range backends {
-		t.Run(backend.name, func(t *testing.T) {
+		t.Run(backend, func(t *testing.T) {
 			setup := getSetupForBackend(t, backend)
 			setupPoolerTest(t, setup)
 
