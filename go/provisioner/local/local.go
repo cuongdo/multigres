@@ -828,10 +828,11 @@ func (p *localProvisioner) provisionMultipooler(ctx context.Context, req *provis
 	}
 
 	// Add pgbackrest TLS certificate paths and port
+	// Note: We don't pass --pgbackrest-ca-file because it causes pgbackrest to send the CA
+	// in the server's certificate chain, which triggers OpenSSL error 19 (self-signed cert in chain)
 	args = append(args,
 		"--pgbackrest-cert-file", p.pgBackRestCertPaths.ServerCertFile,
 		"--pgbackrest-key-file", p.pgBackRestCertPaths.ServerKeyFile,
-		"--pgbackrest-ca-file", p.pgBackRestCertPaths.CACertFile,
 		"--pgbackrest-port", strconv.Itoa(pgbackrestPort),
 	)
 

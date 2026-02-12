@@ -155,9 +155,10 @@ func (pm *MultiPoolerManager) initPgBackRest(ctx context.Context, mode PgBackRes
 		Pg1Path:       filepath.Join(pm.multipooler.PoolerDir, "pg_data"),
 
 		// Use configured certificate paths for server
+		// Note: We don't set ServerCAFile because it causes pgbackrest to send the CA cert
+		// in the server's certificate chain, triggering OpenSSL error 19
 		ServerCertFile: pm.config.PgBackRestCertFile,
 		ServerKeyFile:  pm.config.PgBackRestKeyFile,
-		ServerCAFile:   pm.config.PgBackRestCAFile,
 		ServerPort:     pm.config.PgBackRestPort,
 		ServerAuths:    []string{"pgbackrest=*"},
 	}
