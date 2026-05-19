@@ -225,6 +225,17 @@ func (sc *ScatterConn) StreamExecute(
 			state.PendingTempTableReservation = false
 		}
 
+		// If this query creates a logical replication slot, add the
+		// reason so the multipooler keeps the connection pinned for
+		// subsequent polls.
+		if state.PendingLogicalReplicationReservation {
+			if reservationOpts == nil {
+				reservationOpts = &querypb.ReservationOptions{}
+			}
+			reservationOpts.Reasons |= protoutil.ReasonLogicalReplication
+			state.PendingLogicalReplicationReservation = false
+		}
+
 		reservedState, err := qs.StreamExecute(ctx, target, sql, eo, reservationOpts, callback)
 		sc.applyReservedState(conn, state, target, reservedState)
 
@@ -234,8 +245,9 @@ func (sc *ScatterConn) StreamExecute(
 		return nil
 	}
 
-	// Case 2: Need a new reserved connection — for transaction, temp table, or both.
-	if conn.IsInTransaction() || state.PendingTempTableReservation {
+	// Case 2: Need a new reserved connection — for transaction, temp table,
+	// logical replication, or any combination.
+	if conn.IsInTransaction() || state.PendingTempTableReservation || state.PendingLogicalReplicationReservation {
 		reasons := uint32(0)
 		if conn.IsInTransaction() {
 			reasons |= protoutil.ReasonTransaction
@@ -244,10 +256,19 @@ func (sc *ScatterConn) StreamExecute(
 			reasons |= protoutil.ReasonTempTable
 			state.PendingTempTableReservation = false
 		}
+		if state.PendingLogicalReplicationReservation {
+			reasons |= protoutil.ReasonLogicalReplication
+			state.PendingLogicalReplicationReservation = false
+		}
 		// If the session already has a temp table reservation on another shard,
 		// include the temp table reason so the connection survives COMMIT.
 		if state.HasTempTableReservation() {
 			reasons |= protoutil.ReasonTempTable
+		}
+		// Same for logical replication: keep the pinning reason across
+		// reservation lifecycle events on this shard.
+		if state.HasLogicalReplicationReservation() {
+			reasons |= protoutil.ReasonLogicalReplication
 		}
 
 		sc.logger.DebugContext(ctx, "creating reserved connection",
@@ -359,8 +380,9 @@ func (sc *ScatterConn) PortalStreamExecute(
 	if ss != nil && ss.ReservedState.GetReservedConnectionId() != 0 {
 		eo.ReservedConnectionId = ss.ReservedState.GetReservedConnectionId()
 		qs, err = sc.gateway.QueryServiceByID(ctx, ss.ReservedState.GetPoolerId(), target)
-	} else if conn.IsInTransaction() || state.PendingTempTableReservation {
-		// Case 2: Need a new reserved connection — for transaction, temp table, or both.
+	} else if conn.IsInTransaction() || state.PendingTempTableReservation || state.PendingLogicalReplicationReservation {
+		// Case 2: Need a new reserved connection — for transaction, temp table,
+		// logical replication, or any combination.
 		// We use StreamExecute with reservation options and a no-op "SELECT 1" query
 		// rather than adding a dedicated ReservePortalStreamExecute RPC.
 		reasons := uint32(0)
@@ -371,8 +393,15 @@ func (sc *ScatterConn) PortalStreamExecute(
 			reasons |= protoutil.ReasonTempTable
 			state.PendingTempTableReservation = false
 		}
+		if state.PendingLogicalReplicationReservation {
+			reasons |= protoutil.ReasonLogicalReplication
+			state.PendingLogicalReplicationReservation = false
+		}
 		if state.HasTempTableReservation() {
 			reasons |= protoutil.ReasonTempTable
+		}
+		if state.HasLogicalReplicationReservation() {
+			reasons |= protoutil.ReasonLogicalReplication
 		}
 
 		sc.logger.DebugContext(ctx, "creating reserved connection for portal",
@@ -789,6 +818,9 @@ func (sc *ScatterConn) CopyInitiate(
 		reservationOpts = protoutil.NewTransactionReservationOptions()
 		if state.HasTempTableReservation() {
 			reservationOpts.Reasons |= protoutil.ReasonTempTable
+		}
+		if state.HasLogicalReplicationReservation() {
+			reservationOpts.Reasons |= protoutil.ReasonLogicalReplication
 		}
 		if state.PendingBeginQuery != "" {
 			reservationOpts.BeginQuery = state.PendingBeginQuery

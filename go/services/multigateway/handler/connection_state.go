@@ -78,6 +78,15 @@ type MultiGatewayConnectionState struct {
 	// cleared after the reservation is created.
 	PendingTempTableReservation bool
 
+	// PendingLogicalReplicationReservation is set by the planner (via
+	// LogicalReplicationSlotRoute) when the current query calls
+	// pg_create_logical_replication_slot in any expression context.
+	// ScatterConn consumes it to create a reserved connection with
+	// ReasonLogicalReplication so subsequent polls (e.g. via
+	// pg_logical_slot_get_changes) land on the same backend that owns the
+	// slot. One-shot: cleared after the reservation is created.
+	PendingLogicalReplicationReservation bool
+
 	// TxnStartTime records when the current transaction began (set at BEGIN,
 	// read at COMMIT/ROLLBACK to compute transaction duration). Zero value
 	// means no active transaction is being timed.
@@ -512,6 +521,19 @@ func (m *MultiGatewayConnectionState) HasTempTableReservation() bool {
 	defer m.mu.Unlock()
 	for _, ss := range m.ShardStates {
 		if ss.ReservedState != nil && protoutil.HasTempTableReason(ss.ReservedState.GetReservationReasons()) {
+			return true
+		}
+	}
+	return false
+}
+
+// HasLogicalReplicationReservation returns true if any shard state has a
+// reserved connection with the logical-replication reason set.
+func (m *MultiGatewayConnectionState) HasLogicalReplicationReservation() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, ss := range m.ShardStates {
+		if ss.ReservedState != nil && protoutil.HasLogicalReplicationReason(ss.ReservedState.GetReservationReasons()) {
 			return true
 		}
 	}

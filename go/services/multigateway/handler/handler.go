@@ -260,9 +260,11 @@ func (h *MultiGatewayHandler) HandleQuery(ctx context.Context, conn *server.Conn
 	// The batch-level recordQueryCompletion gets nil result (no plan type for a batch).
 	var result *ExecuteResult
 	if len(asts) > 1 {
-		if st.HasTempTableReservation() {
-			h.logger.DebugContext(ctx, "executing multi-statement batch on temp-table-reserved session",
-				"statement_count", len(asts))
+		if st.HasTempTableReservation() || st.HasLogicalReplicationReservation() {
+			h.logger.DebugContext(ctx, "executing multi-statement batch on pinned session",
+				"statement_count", len(asts),
+				"has_temp_table", st.HasTempTableReservation(),
+				"has_logical_replication", st.HasLogicalReplicationReservation())
 			var allTablesUsed []string
 			for _, stmt := range asts {
 				stmtCtx, cancel := h.statementTimeoutCtx(ctx, st, stmt)

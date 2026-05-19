@@ -87,6 +87,17 @@ type expressionCheckResult struct {
 	// entry), with literal arguments and is_local=false. Ordering matches
 	// the target-list positions left-to-right.
 	SetConfigs []setConfigCall
+
+	// HasLogicalReplicationSlotCreation is true if any FuncCall in the
+	// statement's expression tree resolves to
+	// pg_create_logical_replication_slot (bare or pg_catalog-qualified).
+	// Postgres allows this volatile function anywhere a function call is
+	// valid — SELECT target list, CASE branches, CTEs, INSERT VALUES,
+	// UPDATE SET, etc. — so the dispatch arm cannot rely on statement
+	// shape alone. Detection here piggy-backs on the FuncCall walk that
+	// already runs for blocklist + set_config checks, so the extra cost
+	// is one string compare per FuncCall.
+	HasLogicalReplicationSlotCreation bool
 }
 
 // planUnsupportedConstructs runs the two pre-dispatch rejection checks that
@@ -153,6 +164,13 @@ func inspectExpressionFuncCalls(stmt ast.Stmt) (*expressionCheckResult, error) {
 		if msg, blocked := funcBlocklist[name]; blocked {
 			walkErr = mterrors.NewFeatureNotSupported(msg)
 			return false
+		}
+		if name == logicalReplicationSlotCreator {
+			result.HasLogicalReplicationSlotCreation = true
+			// Keep walking — there may be a blocklisted call or rogue
+			// set_config elsewhere in the tree that still needs to
+			// reject the statement. The set_config branch below is
+			// guarded by a name check, so falling through is safe.
 		}
 		if name != "set_config" {
 			return true

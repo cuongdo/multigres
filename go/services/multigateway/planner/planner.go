@@ -86,6 +86,16 @@ func (p *Planner) Plan(
 		return nil, err
 	}
 
+	// pg_create_logical_replication_slot can appear in any expression
+	// context Postgres accepts a volatile function — SELECT target list,
+	// CASE branches, CTEs, INSERT/UPDATE/DELETE value lists, etc. Detect
+	// once ahead of dispatch so any shape that creates a slot pins the
+	// session, instead of relying on per-statement-arm checks that would
+	// miss INSERT/UPDATE/DELETE.
+	if exprResult.HasLogicalReplicationSlotCreation {
+		return p.planLogicalReplicationSlotCreation(sql)
+	}
+
 	// Handle wrapped EXECUTE forms (EXPLAIN EXECUTE / CREATE TABLE AS EXECUTE)
 	// before normal dispatch. The wrapper's inner ExecuteStmt references a
 	// gateway-managed prepared statement by user-facing name (e.g. "p"); we
@@ -222,8 +232,17 @@ func (p *Planner) PlanPortal(
 	// We throw away the set_config result here: PlanPortal only routes
 	// gateway-local statement types, none of which are SELECTs that could
 	// carry tracked set_configs.
-	if _, err := planUnsupportedConstructs(stmt); err != nil {
+	exprResult, err := planUnsupportedConstructs(stmt)
+	if err != nil {
 		return nil, err
+	}
+
+	// pg_create_logical_replication_slot can appear in any statement
+	// type — route any such portal through Plan() so it gets the
+	// LogicalReplicationSlotRoute primitive instead of falling back to
+	// the bound-portal pooled path that would not pin the session.
+	if exprResult.HasLogicalReplicationSlotCreation {
+		return p.Plan(portalInfo.PreparedStatementInfo.Query, stmt, conn)
 	}
 
 	switch stmt.NodeTag() {
@@ -267,7 +286,8 @@ func (p *Planner) PlanPortal(
 		return nil, nil
 
 	case ast.T_SelectStmt:
-		if ss := stmt.(*ast.SelectStmt); ss.IntoClause != nil && ss.IntoClause.Rel != nil && ss.IntoClause.Rel.RelPersistence == ast.RELPERSISTENCE_TEMP {
+		ss := stmt.(*ast.SelectStmt)
+		if ss.IntoClause != nil && ss.IntoClause.Rel != nil && ss.IntoClause.Rel.RelPersistence == ast.RELPERSISTENCE_TEMP {
 			return p.Plan(portalInfo.PreparedStatementInfo.Query, stmt, conn)
 		}
 		return nil, nil
@@ -310,6 +330,8 @@ func primitiveName(p engine.Primitive) string {
 		return engine.PlanTypeRoute
 	case *engine.TempTableRoute:
 		return engine.PlanTypeTempTableRoute
+	case *engine.LogicalReplicationSlotRoute:
+		return engine.PlanTypeLogicalReplicationSlotRoute
 	case *engine.TransactionPrimitive:
 		return engine.PlanTypeTransaction
 	case *engine.CopyStatement:

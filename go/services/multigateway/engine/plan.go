@@ -27,16 +27,17 @@ import (
 
 // Plan type constants identify the root primitive for observability.
 const (
-	PlanTypeRoute               = "Route"
-	PlanTypeTransaction         = "Transaction"
-	PlanTypeCopyStatement       = "CopyStatement"
-	PlanTypeApplySessionState   = "ApplySessionState"
-	PlanTypeGatewaySessionState = "GatewaySessionState"
-	PlanTypeGatewayShowVariable = "GatewayShowVariable"
-	PlanTypeListenNotify        = "ListenNotify"
-	PlanTypeSequence            = "Sequence"
-	PlanTypeTempTableRoute      = "TempTableRoute"
-	PlanTypeUnknown             = "Unknown"
+	PlanTypeRoute                       = "Route"
+	PlanTypeTransaction                 = "Transaction"
+	PlanTypeCopyStatement               = "CopyStatement"
+	PlanTypeApplySessionState           = "ApplySessionState"
+	PlanTypeGatewaySessionState         = "GatewaySessionState"
+	PlanTypeGatewayShowVariable         = "GatewayShowVariable"
+	PlanTypeListenNotify                = "ListenNotify"
+	PlanTypeSequence                    = "Sequence"
+	PlanTypeTempTableRoute              = "TempTableRoute"
+	PlanTypeLogicalReplicationSlotRoute = "LogicalReplicationSlotRoute"
+	PlanTypeUnknown                     = "Unknown"
 )
 
 // Plan represents a query execution plan.
