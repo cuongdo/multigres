@@ -261,7 +261,7 @@ func (h *MultiGatewayHandler) HandleQuery(ctx context.Context, conn *server.Conn
 	var result *ExecuteResult
 	if len(asts) > 1 {
 		if st.HasTempTableReservation() || st.HasLogicalReplicationReservation() {
-			h.logger.DebugContext(ctx, "executing multi-statement batch on pinned session",
+			h.logger.DebugContext(ctx, "executing multi-statement batch on reserved session",
 				"statement_count", len(asts),
 				"has_temp_table", st.HasTempTableReservation(),
 				"has_logical_replication", st.HasLogicalReplicationReservation())

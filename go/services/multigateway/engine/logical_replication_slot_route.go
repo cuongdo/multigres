@@ -27,63 +27,84 @@ import (
 
 // LogicalReplicationSlotRoute routes a query that creates a logical
 // replication slot (via pg_create_logical_replication_slot) through a
-// reserved connection. It sets PendingLogicalReplicationReservation on the
-// state so that ScatterConn's StreamExecute creates a reserved connection
-// with ReasonLogicalReplication. Mirrors TempTableRoute for symmetry.
+// reserved connection. The session is pinned to a single Postgres
+// backend for the lifetime of the connection so subsequent calls to
+// pg_logical_slot_get_changes / realtime.list_changes land on the same
+// backend that owns the slot — otherwise postgres rejects them with
+// "replication slot is active for PID N".
 //
-// The slot, once created on a Postgres backend, is owned by that backend's
-// PID. Subsequent calls to pg_logical_slot_get_changes must land on the
-// same backend, or postgres rejects them with "replication slot is active
-// for PID N". Pinning the session via the reservation mechanism guarantees
-// stickiness for the lifetime of the connection.
+// Behaviorally, this is a Route with one side effect: it sets
+// PendingLogicalReplicationReservation on the session state so ScatterConn
+// adds ReasonLogicalReplication when it mints (or augments) the reserved
+// connection for this request. Embedding Route reuses its NormalizedAST
+// reconstruction and portal-binding handling, both of which are
+// load-bearing for cacheable statement shapes (SELECT / INSERT / UPDATE /
+// DELETE) where literals like the slot name have been normalized to
+// ParamRefs and must be reconstituted before the SQL reaches postgres.
+//
+// Known limitation: wrapped EXECUTE forms (EXPLAIN EXECUTE,
+// CREATE TABLE ... AS EXECUTE) referencing a PREPAREd slot-creation
+// statement are not pinned. The walker that detects the FuncCall runs
+// before unwrap, when the prepared statement's body is still just a name
+// reference, so the trigger fires only if the wrapped EXECUTE is later
+// unwrapped and re-walked. Realtime does not use this shape; documenting
+// rather than fixing.
 type LogicalReplicationSlotRoute struct {
-	TableGroup string
-	Shard      string
-	Query      string
+	Route
 }
 
-// NewLogicalReplicationSlotRoute creates a new LogicalReplicationSlotRoute primitive.
-func NewLogicalReplicationSlotRoute(tableGroup, shard, sql string) *LogicalReplicationSlotRoute {
-	return &LogicalReplicationSlotRoute{TableGroup: tableGroup, Shard: shard, Query: sql}
+// NewLogicalReplicationSlotRoute creates a LogicalReplicationSlotRoute.
+// astStmt is the (normalized) statement and is stored for SQL
+// reconstruction when bindVars are supplied at execution time. Pass nil
+// for non-cached plans where literals were never stripped.
+func NewLogicalReplicationSlotRoute(tableGroup, shard, sql string, astStmt ast.Stmt) *LogicalReplicationSlotRoute {
+	return &LogicalReplicationSlotRoute{
+		Route: Route{
+			TableGroup:    tableGroup,
+			Shard:         shard,
+			Query:         sql,
+			NormalizedAST: astStmt,
+		},
+	}
 }
 
-// StreamExecute sets the logical-replication reservation flag and delegates
-// to StreamExecute. ScatterConn will see the flag and create a reserved
-// connection with ReasonLogicalReplication.
+// StreamExecute sets the pending logical-replication reservation flag and
+// delegates to the embedded Route. ScatterConn consumes the flag and
+// includes ReasonLogicalReplication in the reservation it mints (or
+// augments) for this request.
 func (t *LogicalReplicationSlotRoute) StreamExecute(
 	ctx context.Context,
 	exec IExecute,
 	conn *server.Conn,
 	state *handler.MultiGatewayConnectionState,
-	_ []*ast.A_Const,
+	bindVars []*ast.A_Const,
 	callback func(context.Context, *sqltypes.Result) error,
 ) error {
 	state.PendingLogicalReplicationReservation = true
-	return exec.StreamExecute(ctx, conn, t.TableGroup, t.Shard, t.Query, nil, state, callback)
+	return t.Route.StreamExecute(ctx, exec, conn, state, bindVars, callback)
 }
 
-// PortalStreamExecute delegates to StreamExecute. The extended-protocol path
-// can reach here only via a composed primitive; current dispatch routes
-// pg_create_logical_replication_slot through the simple-query Plan path.
+// PortalStreamExecute sets the pending reservation flag and delegates to
+// the embedded Route's portal path. This preserves the wire-format Bind
+// values that the portal carries; without it, parameterized slot
+// creation via the extended protocol would lose its bindings and fail.
 func (t *LogicalReplicationSlotRoute) PortalStreamExecute(
 	ctx context.Context,
 	exec IExecute,
 	conn *server.Conn,
 	state *handler.MultiGatewayConnectionState,
-	_ *preparedstatement.PortalInfo,
-	_ int32,
-	_ bool,
+	portalInfo *preparedstatement.PortalInfo,
+	maxRows int32,
+	includeDescribe bool,
 	callback func(context.Context, *sqltypes.Result) error,
 ) error {
-	return t.StreamExecute(ctx, exec, conn, state, nil, callback)
+	state.PendingLogicalReplicationReservation = true
+	return t.Route.PortalStreamExecute(ctx, exec, conn, state, portalInfo, maxRows, includeDescribe, callback)
 }
 
-func (t *LogicalReplicationSlotRoute) GetTableGroup() string { return t.TableGroup }
-
-// GetQuery returns the SQL query.
-func (t *LogicalReplicationSlotRoute) GetQuery() string { return t.Query }
-
-// String returns a description of the primitive for debugging.
+// String returns a description of the primitive for debugging and
+// observability. Overrides the embedded Route.String() so logs and
+// span attributes distinguish the two.
 func (t *LogicalReplicationSlotRoute) String() string {
 	return fmt.Sprintf("LogicalReplicationSlotRoute(%s)", t.Query)
 }

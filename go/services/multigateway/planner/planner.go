@@ -93,7 +93,7 @@ func (p *Planner) Plan(
 	// session, instead of relying on per-statement-arm checks that would
 	// miss INSERT/UPDATE/DELETE.
 	if exprResult.HasLogicalReplicationSlotCreation {
-		return p.planLogicalReplicationSlotCreation(sql)
+		return p.planLogicalReplicationSlotCreation(sql, stmt)
 	}
 
 	// Handle wrapped EXECUTE forms (EXPLAIN EXECUTE / CREATE TABLE AS EXECUTE)
@@ -286,8 +286,7 @@ func (p *Planner) PlanPortal(
 		return nil, nil
 
 	case ast.T_SelectStmt:
-		ss := stmt.(*ast.SelectStmt)
-		if ss.IntoClause != nil && ss.IntoClause.Rel != nil && ss.IntoClause.Rel.RelPersistence == ast.RELPERSISTENCE_TEMP {
+		if ss := stmt.(*ast.SelectStmt); ss.IntoClause != nil && ss.IntoClause.Rel != nil && ss.IntoClause.Rel.RelPersistence == ast.RELPERSISTENCE_TEMP {
 			return p.Plan(portalInfo.PreparedStatementInfo.Query, stmt, conn)
 		}
 		return nil, nil
